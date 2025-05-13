@@ -5,7 +5,7 @@ export interface FlashcardType {
 }
 
 export interface QuizQuestionType {
-  id: string;
+  id:string;
   question: string;
   options: string[];
   correctAnswer: string;
@@ -17,4 +17,9 @@ export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string | JSX.Element;
   timestamp: Date;
+}
+
+export interface ExportedDataType {
+  flashcards: FlashcardType[];
+  quizQuestions?: QuizQuestionType[]; // Quiz questions are optional in an imported file
 }
