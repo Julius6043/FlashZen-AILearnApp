@@ -13,9 +13,11 @@ import { Switch } from '@/components/ui/switch';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
 import type { FlashcardType, QuizQuestionType, Message } from '@/types';
-import { Bot, User, Loader2, Send, FileText, Settings2, AlertTriangle, X, Search } from 'lucide-react';
+import { Bot, User, Loader2, Send, FileText, Settings2, AlertTriangle, X, Search, BarChart3 } from 'lucide-react';
 import { Avatar, AvatarFallback } from './ui/avatar';
 import { cn } from '@/lib/utils';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
 
 interface GenerateTabProps {
   onFlashcardsAndQuizGenerated: (
@@ -39,6 +41,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
   const [numFlashcards, setNumFlashcards] = React.useState<number>(10);
   const [numQuizQuestions, setNumQuizQuestions] = React.useState<number>(5);
   const [useDuckDuckGoSearch, setUseDuckDuckGoSearch] = React.useState<boolean>(false);
+  const [difficulty, setDifficulty] = React.useState<string>("Medium");
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
 
@@ -152,30 +155,44 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
       return;
     }
 
-    const userMessageContent = currentPrompt ? currentPrompt : "Using content from uploaded PDF.";
+    const userMessageContentElements: JSX.Element[] = [];
+    if (currentPrompt) {
+      userMessageContentElements.push(<span key="prompt-text">{currentPrompt}</span>);
+    } else {
+      userMessageContentElements.push(<span key="pdf-indicator">Using content from uploaded PDF.</span>);
+    }
+    userMessageContentElements.push(
+      <span key="difficulty-info" className="block text-xs opacity-80 mt-1">
+        (Difficulty: {difficulty})
+      </span>
+    );
+    
     const userMessage: Message = {
       id: Date.now().toString() + 'user',
       role: 'user',
-      content: userMessageContent,
+      content: <div>{userMessageContentElements}</div>,
       timestamp: new Date(),
     };
+
     setMessages(prev => [...prev, userMessage]);
     if (currentPrompt) setPrompt('');
 
     let duckDuckGoContextData: string | undefined = undefined;
+    const effectivePromptForSearch = currentPrompt || "content from PDF";
 
-    if (useDuckDuckGoSearch && currentPrompt) {
+
+    if (useDuckDuckGoSearch && effectivePromptForSearch) {
       setIsSearchingWeb(true);
       const searchSystemMessage: Message = {
         id: Date.now().toString() + 'system_search_start',
         role: 'system',
-        content: `Searching the web for "${currentPrompt}"...`,
+        content: `Searching the web for "${effectivePromptForSearch}"...`,
         timestamp: new Date(),
       };
       setMessages(prev => [...prev, searchSystemMessage]);
 
       try {
-        const searchResult = await searchDuckDuckGo(currentPrompt);
+        const searchResult = await searchDuckDuckGo(effectivePromptForSearch);
         if (searchResult) {
           if (searchResult.startsWith('Error:')) {
             const searchErrorSystemMessage: Message = {
@@ -193,7 +210,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
               role: 'system',
               content: (
                 <div>
-                  <p className="font-semibold text-green-600 dark:text-green-400">Web search context found for "{currentPrompt}".</p>
+                  <p className="font-semibold text-green-600 dark:text-green-400">Web search context found for "{effectivePromptForSearch}".</p>
                   <ScrollArea className="max-h-32 rounded-md border bg-muted p-2 text-xs mt-1">
                     <pre className="whitespace-pre-wrap break-all">{searchResult}</pre>
                   </ScrollArea>
@@ -207,7 +224,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
           const searchNoResultSystemMessage: Message = {
             id: Date.now().toString() + 'system_search_noresult',
             role: 'system',
-            content: <p className="font-semibold">No specific context found from web search for "{currentPrompt}".</p>,
+            content: <p className="font-semibold">No specific context found from web search for "{effectivePromptForSearch}".</p>,
             timestamp: new Date(),
           };
           setMessages(prev => [...prev, searchNoResultSystemMessage]);
@@ -228,12 +245,14 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
     
     setIsGeneratingContent(true);
     try {
+      const generationInputPrompt = currentPrompt || (extractedPdfText ? "Summarize and create flashcards from the provided PDF content." : "Generate flashcards on a general topic.");
       const result = await generateFlashcards({ 
-        prompt: userMessage.content as string, 
+        prompt: generationInputPrompt, 
         pdfText: extractedPdfText ?? undefined,
         duckDuckGoContext: duckDuckGoContextData,
         numFlashcards,
         numQuizQuestions: numQuizQuestions > 0 ? numQuizQuestions : undefined,
+        difficulty: difficulty,
       });
       
       let parsedFlashcards: FlashcardType[] = [];
@@ -446,7 +465,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
         </div>
       </ScrollArea>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4 px-1">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-4 px-1">
         <div className="relative">
           <Label htmlFor="pdf-upload" className="flex items-center gap-2 mb-1 text-sm font-medium">
             <FileText size={16} /> Upload PDF (Optional)
@@ -510,6 +529,22 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
            <p className="text-xs text-muted-foreground mt-1">(0 for none)</p>
         </div>
         <div className="flex flex-col justify-center">
+          <Label htmlFor="difficulty-select" className="flex items-center gap-2 mb-1 text-sm font-medium">
+             <BarChart3 size={16} /> Difficulty
+          </Label>
+          <Select value={difficulty} onValueChange={setDifficulty} disabled={anyLoading}>
+            <SelectTrigger id="difficulty-select" className="text-sm h-10">
+              <SelectValue placeholder="Select difficulty" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="Easy">Easy</SelectItem>
+              <SelectItem value="Medium">Medium</SelectItem>
+              <SelectItem value="Hard">Hard</SelectItem>
+              <SelectItem value="Expert">Expert</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col justify-center">
           <Label htmlFor="use-duckduckgo" className="flex items-center gap-2 mb-1 text-sm font-medium">
             <Search size={16} /> Web Search
           </Label>
@@ -520,7 +555,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
               onCheckedChange={setUseDuckDuckGoSearch}
               disabled={anyLoading} 
             />
-            <span className="text-xs text-muted-foreground">Enable DuckDuckGo Search</span>
+            <span className="text-xs text-muted-foreground">Enable DuckDuckGo</span>
           </div>
         </div>
       </div>

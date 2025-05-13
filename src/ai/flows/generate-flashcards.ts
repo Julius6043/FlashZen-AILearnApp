@@ -20,6 +20,7 @@ const GenerateFlashcardsInputSchema = z.object({
   numQuizQuestions: z.number().int().min(0).optional().describe('Desired number of NEW quiz questions. If 0 or undefined, no new quiz questions will be generated (if expanding, this is the additional count). Default 0 if not specified.'),
   existingFlashcardsJson: z.string().optional().describe('Stringified JSON of existing flashcards to use as context for expansion. Generate new, distinct items.'),
   existingQuizQuestionsJson: z.string().optional().describe('Stringified JSON of existing quiz questions to use as context for expansion. Generate new, distinct items.'),
+  difficulty: z.string().optional().describe('The desired difficulty level for the generated content (e.g., Easy, Medium, Hard, Expert).'),
 });
 export type GenerateFlashcardsInput = z.infer<typeof GenerateFlashcardsInputSchema>;
 
@@ -46,6 +47,14 @@ const prompt = ai.definePrompt({
   prompt: `You are an expert flashcard and quiz generation assistant.
 
 User's primary query/instruction: "{{{prompt}}}"
+
+{{#if difficulty}}
+The user has requested a difficulty level of "{{difficulty}}". Adjust the complexity of the generated content accordingly:
+- Easy: Focus on fundamental concepts, basic definitions, and straightforward questions.
+- Medium: Include more detailed explanations, common examples, and moderately challenging questions.
+- Hard: Cover in-depth concepts, complex scenarios, nuanced differences, and challenging questions that require deeper understanding.
+- Expert: Target highly specialized knowledge, advanced topics, critical analysis, and questions that assess expert-level comprehension.
+{{/if}}
 
 {{#if existingFlashcardsJson}}
 You are EXPANDING an existing set of flashcards.
@@ -107,6 +116,9 @@ Desired number of NEW flashcards: {{numFlashcards}}
 {{#if numQuizQuestions}}
 Desired number of NEW quiz questions: {{numQuizQuestions}}
 {{/if}}
+{{#if difficulty}}
+Desired difficulty: {{difficulty}}
+{{/if}}
 `,
 });
 
@@ -155,3 +167,14 @@ const generateFlashcardsFlow = ai.defineFlow(
   }
 );
 
+// Helper to ensure output is always valid, even if LLM returns unexpected (e.g. null)
+// This was a previous attempt to fix the null output issue directly, 
+// but the prompt constraints are the primary defense.
+// The 'if (!output)' check above now handles this more robustly.
+// Example:
+// const { output } = await prompt(input);
+// if (!output) {
+//   // Handle null or undefined output from LLM, e.g., by returning empty/default.
+//   return { flashcards: "[]", quizQuestions: "[]" };
+// }
+// return output;
