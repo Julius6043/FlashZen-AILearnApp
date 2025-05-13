@@ -18,25 +18,9 @@ const GenerateFlashcardsInputSchema = z.object({
 export type GenerateFlashcardsInput = z.infer<typeof GenerateFlashcardsInputSchema>;
 
 const GenerateFlashcardsOutputSchema = z.object({
-  flashcards: z.string().describe('The generated flashcards in JSON format.'),
+  flashcards: z.string().describe('The generated flashcards in JSON format. This should be a string containing a JSON array of objects, where each object has a "question" and "answer" field.'),
 });
 export type GenerateFlashcardsOutput = z.infer<typeof GenerateFlashcardsOutputSchema>;
-
-const validateJsonTool = ai.defineTool({
-  name: 'validateJson',
-  description: 'Validates if the provided string is a valid JSON format.',
-  inputSchema: z.object({
-    jsonString: z.string().describe('The JSON string to validate.'),
-  }),
-  outputSchema: z.boolean(),
-}, async (input) => {
-  try {
-    JSON.parse(input.jsonString);
-    return true;
-  } catch (e) {
-    return false;
-  }
-});
 
 export async function generateFlashcards(input: GenerateFlashcardsInput): Promise<GenerateFlashcardsOutput> {
   return generateFlashcardsFlow(input);
@@ -46,8 +30,18 @@ const prompt = ai.definePrompt({
   name: 'generateFlashcardsPrompt',
   input: {schema: GenerateFlashcardsInputSchema},
   output: {schema: GenerateFlashcardsOutputSchema},
-  tools: [validateJsonTool],
-  prompt: `You are a flashcard generator. Please generate flashcards in JSON format based on the following prompt: {{{prompt}}}. Validate the JSON structure using the validateJson tool before returning it.`,
+  // tools: [], // Tool removed for simplicity
+  prompt: `You are an expert flashcard generation assistant.
+Based on the user's query: {{{prompt}}}, you need to generate a set of flashcards.
+Each flashcard must have a "question" and an "answer".
+The collection of flashcards should be formatted as a JSON array of objects.
+For example: [{"question": "What is the capital of France?", "answer": "Paris"}, {"question": "What is 2 + 2?", "answer": "4"}]
+
+Your final output MUST be a JSON object with a single key "flashcards". The value of this "flashcards" key MUST be the stringified JSON array of flashcards you generated.
+
+User's request:
+{{{prompt}}}
+`,
 });
 
 const generateFlashcardsFlow = ai.defineFlow(
@@ -58,6 +52,13 @@ const generateFlashcardsFlow = ai.defineFlow(
   },
   async input => {
     const {output} = await prompt(input);
-    return output!;
+    if (!output || typeof output.flashcards !== 'string') {
+      console.error("LLM did not produce the expected 'flashcards' string output.", output);
+      // Attempt to provide a valid empty structure if primary generation fails
+      // This helps satisfy the schema for the flow and lets the client handle "no flashcards"
+      return { flashcards: "[]" }; 
+    }
+    return output;
   }
 );
+
