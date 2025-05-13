@@ -4,14 +4,16 @@
 import * as React from 'react';
 import { generateFlashcards } from '@/ai/flows/generate-flashcards';
 import { extractTextFromPdf } from '@/ai/flows/extract-text-from-pdf-flow';
+import { searchDuckDuckGo } from '@/app/actions/search-actions';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
 import type { FlashcardType, QuizQuestionType, Message } from '@/types';
-import { Bot, User, Loader2, Send, FileText, Settings2, AlertTriangle, X } from 'lucide-react';
+import { Bot, User, Loader2, Send, FileText, Settings2, AlertTriangle, X, Search } from 'lucide-react';
 import { Avatar, AvatarFallback } from './ui/avatar';
 import { cn } from '@/lib/utils';
 
@@ -19,14 +21,15 @@ interface GenerateTabProps {
   onFlashcardsAndQuizGenerated: (
     flashcards: FlashcardType[], 
     quizQuestions?: QuizQuestionType[],
-    source?: 'generate' | 'import' // Added source for confirmation dialog context
+    source?: 'generate' | 'import'
   ) => void;
 }
 
 export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) {
   const [prompt, setPrompt] = React.useState('');
-  const [isLoading, setIsLoading] = React.useState(false);
+  const [isGeneratingContent, setIsGeneratingContent] = React.useState(false);
   const [isProcessingPdf, setIsProcessingPdf] = React.useState(false);
+  const [isSearchingWeb, setIsSearchingWeb] = React.useState(false);
   const [messages, setMessages] = React.useState<Message[]>([]);
   const { toast } = useToast();
   const scrollAreaRef = React.useRef<HTMLDivElement>(null);
@@ -35,6 +38,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
   const [extractedPdfText, setExtractedPdfText] = React.useState<string | null>(null);
   const [numFlashcards, setNumFlashcards] = React.useState<number>(10);
   const [numQuizQuestions, setNumQuizQuestions] = React.useState<number>(5);
+  const [useDuckDuckGoSearch, setUseDuckDuckGoSearch] = React.useState<boolean>(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
 
@@ -48,7 +52,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
     setPdfFile(null);
     setExtractedPdfText(null);
     if (fileInputRef.current) {
-      fileInputRef.current.value = ''; // Reset the file input
+      fileInputRef.current.value = ''; 
     }
      const systemMessageClear: Message = {
         id: Date.now().toString() + 'system_pdf_cleared',
@@ -106,7 +110,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
             setMessages(prev => [...prev, systemMessageSuccess]);
             toast({ title: 'PDF Processed', description: `Text extracted from ${file.name}.` });
           } else {
-             setExtractedPdfText(null); // Keep PDF file object for name display, but no text
+             setExtractedPdfText(null); 
              const systemMessageEmpty: Message = {
               id: Date.now().toString() + 'system_pdf_empty',
               role: 'system',
@@ -142,13 +146,13 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!prompt.trim() && !extractedPdfText) {
+    const currentPrompt = prompt.trim();
+    if (!currentPrompt && !extractedPdfText) {
       toast({ title: 'Error', description: 'Prompt or PDF content cannot be empty.', variant: 'destructive' });
       return;
     }
 
-    setIsLoading(true);
-    const userMessageContent = prompt.trim() ? prompt : "Using content from uploaded PDF.";
+    const userMessageContent = currentPrompt ? currentPrompt : "Using content from uploaded PDF.";
     const userMessage: Message = {
       id: Date.now().toString() + 'user',
       role: 'user',
@@ -156,12 +160,78 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
       timestamp: new Date(),
     };
     setMessages(prev => [...prev, userMessage]);
-    if (prompt.trim()) setPrompt(''); // Clear prompt only if it was used
+    if (currentPrompt) setPrompt('');
 
+    let duckDuckGoContextData: string | undefined = undefined;
+
+    if (useDuckDuckGoSearch && currentPrompt) {
+      setIsSearchingWeb(true);
+      const searchSystemMessage: Message = {
+        id: Date.now().toString() + 'system_search_start',
+        role: 'system',
+        content: `Searching the web for "${currentPrompt}"...`,
+        timestamp: new Date(),
+      };
+      setMessages(prev => [...prev, searchSystemMessage]);
+
+      try {
+        const searchResult = await searchDuckDuckGo(currentPrompt);
+        if (searchResult) {
+          if (searchResult.startsWith('Error:')) {
+            const searchErrorSystemMessage: Message = {
+              id: Date.now().toString() + 'system_search_error',
+              role: 'system',
+              content: <p className="font-semibold text-destructive">{searchResult}</p>,
+              timestamp: new Date(),
+            };
+            setMessages(prev => [...prev, searchErrorSystemMessage]);
+            toast({ title: 'Web Search Error', description: searchResult, variant: 'destructive' });
+          } else {
+            duckDuckGoContextData = searchResult;
+            const searchSuccessSystemMessage: Message = {
+              id: Date.now().toString() + 'system_search_success',
+              role: 'system',
+              content: (
+                <div>
+                  <p className="font-semibold text-green-600 dark:text-green-400">Web search context found for "{currentPrompt}".</p>
+                  <ScrollArea className="max-h-32 rounded-md border bg-muted p-2 text-xs mt-1">
+                    <pre className="whitespace-pre-wrap break-all">{searchResult}</pre>
+                  </ScrollArea>
+                </div>
+              ),
+              timestamp: new Date(),
+            };
+            setMessages(prev => [...prev, searchSuccessSystemMessage]);
+          }
+        } else {
+          const searchNoResultSystemMessage: Message = {
+            id: Date.now().toString() + 'system_search_noresult',
+            role: 'system',
+            content: <p className="font-semibold">No specific context found from web search for "{currentPrompt}".</p>,
+            timestamp: new Date(),
+          };
+          setMessages(prev => [...prev, searchNoResultSystemMessage]);
+        }
+      } catch (searchError: any) {
+        const searchErrorSystemMessage: Message = {
+            id: Date.now().toString() + 'system_search_exception',
+            role: 'system',
+            content: <p className="font-semibold text-destructive">Web search failed: {searchError.message}</p>,
+            timestamp: new Date(),
+        };
+        setMessages(prev => [...prev, searchErrorSystemMessage]);
+        toast({ title: 'Web Search Failed', description: searchError.message, variant: 'destructive' });
+      } finally {
+        setIsSearchingWeb(false);
+      }
+    }
+    
+    setIsGeneratingContent(true);
     try {
       const result = await generateFlashcards({ 
-        prompt: userMessage.content as string, // Prompt is always present now
+        prompt: userMessage.content as string, 
         pdfText: extractedPdfText ?? undefined,
+        duckDuckGoContext: duckDuckGoContextData,
         numFlashcards,
         numQuizQuestions: numQuizQuestions > 0 ? numQuizQuestions : undefined,
       });
@@ -216,7 +286,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
           } else {
             throw new Error('Generated quiz data is not an array.');
           }
-           if (parsedQuizQuestions.length === 0 && result.quizQuestions !== "[]") {
+           if (parsedQuizQuestions && parsedQuizQuestions.length === 0 && result.quizQuestions !== "[]") { // check parsedQuizQuestions exists
             throw new Error('No valid quiz questions generated from non-empty AI response.');
           }
         } catch (parseError: any) { 
@@ -283,17 +353,13 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
       };
       setMessages(prev => [...prev, aiMessage]);
 
-      // Use the callback from HomePage which might trigger a confirmation
       onFlashcardsAndQuizGenerated(parsedFlashcards, parsedQuizQuestions, 'generate');
 
-      // Toast messages will be handled by HomePage after confirmation or directly.
-      // For local errors before calling onFlashcardsAndQuizGenerated:
       if (parsedFlashcards.length === 0 && (flashcardParseError || quizParseError)) {
          toast({ title: 'Parsing Error', description: 'Could not fully parse the AI response. Check details in chat.', variant: 'destructive' });
       } else if (parsedFlashcards.length === 0 && !flashcardParseError && !quizParseError) {
          toast({ title: 'No Content', description: 'AI did not generate valid flashcards or quiz questions.', variant: 'default' });
       }
-
 
     } catch (error: any) { 
       console.error('Error generating content:', error);
@@ -312,12 +378,14 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
       setMessages(prev => [...prev, aiErrorMessage]);
       toast({ title: 'Generation Error', description: errorMessage, variant: 'destructive' });
     } finally {
-      setIsLoading(false);
+      setIsGeneratingContent(false);
     }
   };
 
+  const anyLoading = isProcessingPdf || isSearchingWeb || isGeneratingContent;
+
   return (
-    <div className="flex flex-col h-full max-h-[75vh]">
+    <div className="flex flex-col h-full max-h-[calc(var(--min-content-height,75vh)+160px)] md:max-h-[calc(var(--min-content-height,70vh)+180px)]">
       <ScrollArea className="flex-grow p-1 md:p-4 rounded-md mb-4" ref={scrollAreaRef}>
         {messages.length === 0 && (
           <div className="text-center text-muted-foreground py-10">
@@ -344,7 +412,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
                    <Bot size={18} />}
                 </AvatarFallback>
               </Avatar>
-              <div className="flex-1 text-sm">
+              <div className="flex-1 text-sm break-words">
                 {msg.role !== 'system' && (
                   <p className="font-semibold mb-1">
                     {msg.role === 'user' ? 'You' : 'FlashZen AI'}
@@ -357,7 +425,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
               </div>
             </div>
           ))}
-          {(isLoading || isProcessingPdf) && (
+          {anyLoading && (
              <div className="flex items-start gap-3 p-3 rounded-lg shadow-sm max-w-[90%] bg-muted">
                 <Avatar className="w-8 h-8">
                   <AvatarFallback><Bot size={18} /></AvatarFallback>
@@ -366,7 +434,11 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
                   <p className="font-semibold mb-1">FlashZen AI</p>
                   <div className="flex items-center space-x-2">
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    <span>{isProcessingPdf ? 'Processing PDF...' : 'Generating content...'}</span>
+                    <span>
+                      {isProcessingPdf ? 'Processing PDF...' :
+                       isSearchingWeb ? 'Searching web...' :
+                       isGeneratingContent ? 'Generating content...' : 'Loading...'}
+                    </span>
                   </div>
                 </div>
              </div>
@@ -374,7 +446,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
         </div>
       </ScrollArea>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4 px-1">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4 px-1">
         <div className="relative">
           <Label htmlFor="pdf-upload" className="flex items-center gap-2 mb-1 text-sm font-medium">
             <FileText size={16} /> Upload PDF (Optional)
@@ -386,7 +458,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
             onChange={handlePdfFileChange} 
             ref={fileInputRef}
             className="text-sm file:mr-2 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-xs file:bg-muted file:text-muted-foreground hover:file:bg-primary/20"
-            disabled={isLoading || isProcessingPdf}
+            disabled={anyLoading}
           />
           {pdfFile && (
             <Button 
@@ -394,7 +466,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
               size="icon" 
               className="absolute top-6 right-0 h-7 w-7" 
               onClick={clearPdfFile}
-              disabled={isLoading || isProcessingPdf}
+              disabled={anyLoading}
               aria-label="Clear PDF file"
             >
               <X size={16} />
@@ -418,7 +490,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
             min={1}
             max={50}
             className="text-sm"
-            disabled={isLoading || isProcessingPdf}
+            disabled={anyLoading}
           />
         </div>
         <div>
@@ -433,9 +505,23 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
             min={0}
             max={25}
             className="text-sm"
-            disabled={isLoading || isProcessingPdf}
+            disabled={anyLoading}
           />
            <p className="text-xs text-muted-foreground mt-1">(0 for none)</p>
+        </div>
+        <div className="flex flex-col justify-center">
+          <Label htmlFor="use-duckduckgo" className="flex items-center gap-2 mb-1 text-sm font-medium">
+            <Search size={16} /> Web Search
+          </Label>
+          <div className="flex items-center space-x-2 mt-1">
+            <Switch 
+              id="use-duckduckgo" 
+              checked={useDuckDuckGoSearch} 
+              onCheckedChange={setUseDuckDuckGoSearch}
+              disabled={anyLoading} 
+            />
+            <span className="text-xs text-muted-foreground">Enable DuckDuckGo Search</span>
+          </div>
         </div>
       </div>
 
@@ -443,17 +529,17 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
         <Textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder={extractedPdfText ? "Add additional instructions or context for the PDF..." : "Enter your topic or text here..."}
+          placeholder={extractedPdfText ? "Add instructions or context for the PDF..." : "Enter your topic or text here..."}
           className="flex-grow resize-none min-h-[60px] shadow-sm focus-visible:ring-primary"
           rows={2}
-          disabled={isLoading || isProcessingPdf}
+          disabled={anyLoading}
         />
         <Button 
           type="submit" 
-          disabled={isLoading || isProcessingPdf || (!prompt.trim() && !extractedPdfText)} 
+          disabled={anyLoading || (!prompt.trim() && !extractedPdfText)} 
           className="h-auto px-4 md:px-6 shadow-md hover:shadow-lg transition-shadow"
         >
-          {isLoading || isProcessingPdf ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+          {anyLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
           <span className="sr-only">Generate</span>
         </Button>
       </form>

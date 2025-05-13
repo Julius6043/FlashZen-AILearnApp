@@ -15,6 +15,7 @@ import {z} from 'genkit';
 const GenerateFlashcardsInputSchema = z.object({
   prompt: z.string().describe('The text prompt to generate flashcards from.'),
   pdfText: z.string().optional().describe('Text content extracted from an uploaded PDF.'),
+  duckDuckGoContext: z.string().optional().describe('Context from DuckDuckGo search results.'),
   numFlashcards: z.number().int().positive().optional().default(10).describe('Desired number of flashcards.'),
   numQuizQuestions: z.number().int().positive().optional().describe('Desired number of quiz questions. If 0 or undefined, no quiz questions will be generated.'),
 });
@@ -41,6 +42,8 @@ const prompt = ai.definePrompt({
   output: {schema: GenerateFlashcardsOutputSchema},
   prompt: `You are an expert flashcard and quiz generation assistant.
 
+User's primary query: "{{{prompt}}}"
+
 {{#if pdfText}}
 The user has uploaded a PDF document. Please prioritize the content from this PDF for generation.
 PDF Content:
@@ -49,7 +52,15 @@ PDF Content:
 --- END PDF CONTENT ---
 {{/if}}
 
-Based on the user's query: "{{{prompt}}}"{{#if pdfText}} and the provided PDF content{{/if}}:
+{{#if duckDuckGoContext}}
+Additional context from a web search has been provided. Use this to supplement your knowledge.
+Web Search Context:
+--- START WEB SEARCH CONTEXT ---
+{{{duckDuckGoContext}}}
+--- END WEB SEARCH CONTEXT ---
+{{/if}}
+
+Based on the user's query: "{{{prompt}}}"{{#if pdfText}} and the provided PDF content{{/if}}{{#if duckDuckGoContext}} and the web search context{{/if}}:
 
 1. Flashcards:
    Generate approximately {{numFlashcards}} flashcards.
@@ -94,6 +105,20 @@ const generateFlashcardsFlow = ai.defineFlow(
     const {output} = await prompt(input);
     if (!output || typeof output.flashcards !== 'string') {
       console.error("LLM did not produce the expected 'flashcards' string output.", output);
+      // Attempt to salvage if output is an object but flashcards is not a string
+      if (output && typeof output.flashcards === 'object') {
+        try {
+          const flashcardsString = JSON.stringify(output.flashcards);
+          const quizQuestionsString = (output.quizQuestions && typeof output.quizQuestions === 'object') 
+            ? JSON.stringify(output.quizQuestions)
+            : output.quizQuestions;
+
+          return { flashcards: flashcardsString, quizQuestions: quizQuestionsString === null ? undefined : quizQuestionsString };
+        } catch (e) {
+            // stringify failed
+             return { flashcards: "[]" };
+        }
+      }
       return { flashcards: "[]" }; 
     }
     // Ensure quizQuestions is either a string or undefined, not null.
