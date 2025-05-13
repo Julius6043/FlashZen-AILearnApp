@@ -37,7 +37,7 @@ export default function HomePage() {
   const [flashcards, setFlashcards] = React.useState<FlashcardType[]>([]);
   const [quizQuestions, setQuizQuestions] = React.useState<QuizQuestionType[]>([]);
   const [activeTab, setActiveTab] = React.useState<TabValue>('generate');
-  const { toast } = useToast();
+  const { toast, dismiss: dismissToast } = useToast(); // Destructure dismissToast
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const [isConfirmationDialogOpen, setIsConfirmationDialogOpen] = React.useState(false);
@@ -91,7 +91,7 @@ export default function HomePage() {
     }
     setIsExpanding(true);
     const toastId = `expanding-${type}-${Date.now()}`;
-    toast({
+    const currentToastInstance = toast({ // Store the toast instance
       id: toastId,
       title: `Expanding ${type}...`,
       description: (
@@ -158,24 +158,25 @@ export default function HomePage() {
       if (!parseError) {
         if (type === 'flashcards' && newGeneratedFlashcards.length > 0) {
           setFlashcards(prev => [...prev, ...newGeneratedFlashcards]);
-          toast.update(toastId, { title: 'Expansion Successful!', description: `${newGeneratedFlashcards.length} new flashcards added.`, duration: 5000 });
+          currentToastInstance.update({ title: 'Expansion Successful!', description: `${newGeneratedFlashcards.length} new flashcards added.`, duration: 5000 });
         } else if (type === 'quiz' && newGeneratedQuizQuestions.length > 0) {
           setQuizQuestions(prev => [...prev, ...newGeneratedQuizQuestions]);
-          toast.update(toastId, { title: 'Expansion Successful!', description: `${newGeneratedQuizQuestions.length} new quiz questions added.`, duration: 5000 });
+          currentToastInstance.update({ title: 'Expansion Successful!', description: `${newGeneratedQuizQuestions.length} new quiz questions added.`, duration: 5000 });
         } else {
-           toast.update(toastId, { title: 'Expansion Note', description: `No new ${type} were generated, or the AI returned empty results.`, duration: 5000 });
+           currentToastInstance.update({ title: 'Expansion Note', description: `No new ${type} were generated, or the AI returned empty results.`, duration: 5000 });
         }
       } else {
-        toast.dismiss(toastId); // Dismiss loading toast if there was a parse error already handled
+        dismissToast(toastId); // Dismiss loading toast if there was a parse error already handled
       }
 
     } catch (error: any) {
       console.error(`Error expanding ${type}:`, error);
-      toast.update(toastId, { title: 'Expansion Failed', description: `Could not generate additional ${type}: ${error.message}`, variant: 'destructive', duration: 5000 });
+      currentToastInstance.update({ title: 'Expansion Failed', description: `Could not generate additional ${type}: ${error.message}`, variant: 'destructive', duration: 5000 });
     } finally {
       setIsExpanding(false);
       // Ensure any persistent toast is dismissed if not updated to success/failure
-      setTimeout(() => toast.dismiss(toastId), 500);
+      // The update calls above should handle this, but as a fallback:
+      setTimeout(() => dismissToast(toastId), 5100); // Give a bit more time than the update duration
     }
   };
 
@@ -372,3 +373,4 @@ export default function HomePage() {
     </div>
   );
 }
+
