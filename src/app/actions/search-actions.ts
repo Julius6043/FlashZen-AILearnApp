@@ -3,19 +3,26 @@
 
 import { z } from 'zod';
 
-const DuckDuckGoTopicSchema = z.object({
-  Result: z.string().optional(),
-  Icon: z.object({
-    URL: z.string().optional(),
-    Height: z.number().optional(),
-    Width: z.number().optional(),
-  }).optional(),
-  FirstURL: z.string().optional(),
-  Text: z.string().optional(),
-});
+// Forward declaration for recursive schema
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const DuckDuckGoTopicSchema: z.ZodTypeAny = z.lazy(() =>
+  z.object({
+    Result: z.string().optional(),
+    Icon: z.object({
+      URL: z.string().optional(),
+      Height: z.number().optional(),
+      Width: z.number().optional(),
+    }).optional(),
+    FirstURL: z.string().optional(),
+    Text: z.string().optional(),
+    // For categories/disambiguation groups
+    Name: z.string().optional(), // Name of the group
+    Topics: z.array(DuckDuckGoTopicSchema).optional(), // Array of sub-topics
+  })
+);
 
 const DuckDuckGoResponseSchema = z.object({
-  AbstractText: z.string().optional(),
+  Abstract: z.string().optional(), // Corrected from AbstractText
   AbstractSource: z.string().optional(),
   AbstractURL: z.string().optional(),
   Image: z.string().optional(),
@@ -29,6 +36,39 @@ const DuckDuckGoResponseSchema = z.object({
   Results: z.array(DuckDuckGoTopicSchema).optional(), 
   Type: z.string().optional(), 
 });
+
+type DuckDuckGoTopic = z.infer<typeof DuckDuckGoTopicSchema>;
+
+// Helper function to extract text from topics and sub-topics
+function extractTopicTexts(topics: DuckDuckGoTopic[] | undefined, maxTopics: number): string[] {
+  if (!topics) return [];
+  const texts: string[] = [];
+
+  function processTopic(topic: DuckDuckGoTopic) {
+    if (texts.length >= maxTopics) return;
+
+    if (topic.Text && topic.Text.trim() && !topic.Result?.includes('Category:') && !topic.Result?.startsWith('<a href="https://duckduckgo.com/c/')) {
+      let textToAdd = topic.Text.replace(/<[^>]*>?/gm, ''); // Strip HTML tags
+      if (topic.FirstURL) {
+        textToAdd += ` (More: ${topic.FirstURL})`;
+      }
+      texts.push(textToAdd);
+    }
+
+    if (topic.Topics && topic.Topics.length > 0) {
+      for (const subTopic of topic.Topics) {
+        if (texts.length >= maxTopics) break;
+        processTopic(subTopic); // Recursive call
+      }
+    }
+  }
+
+  for (const topic of topics) {
+    if (texts.length >= maxTopics) break;
+    processTopic(topic);
+  }
+  return texts;
+}
 
 
 export async function searchDuckDuckGo(query: string): Promise<string | null> {
@@ -64,14 +104,14 @@ export async function searchDuckDuckGo(query: string): Promise<string | null> {
     let context = '';
     const MAX_CONTEXT_LENGTH = 2000; // Limit context length to avoid overly long prompts
 
-    if (result.Heading && result.AbstractText && result.AbstractText.trim()) {
-      context += `Topic: ${result.Heading}\nSummary: ${result.AbstractText}\n`;
+    if (result.Heading && result.Abstract && result.Abstract.trim()) { // Changed AbstractText to Abstract
+      context += `Topic: ${result.Heading}\nSummary: ${result.Abstract}\n`; // Changed AbstractText to Abstract
       if (result.AbstractURL) {
         context += `Source: ${result.AbstractURL}\n`;
       }
       context += '---\n';
-    } else if (result.AbstractText && result.AbstractText.trim()) {
-        context += `Search Result Summary: ${result.AbstractText}\n`;
+    } else if (result.Abstract && result.Abstract.trim()) { // Changed AbstractText to Abstract
+        context += `Search Result Summary: ${result.Abstract}\n`; // Changed AbstractText to Abstract
         if (result.AbstractURL) {
             context += `Source: ${result.AbstractURL}\n`;
         }
@@ -99,21 +139,11 @@ export async function searchDuckDuckGo(query: string): Promise<string | null> {
 
     const MAX_RELATED_TOPICS = 5;
     if (result.RelatedTopics && result.RelatedTopics.length > 0) {
-      const relevantTopics = result.RelatedTopics
-        .filter(topic => topic.Text && topic.Text.trim() && !topic.Result?.includes('Category:') && !topic.Result?.startsWith('<a href="https://duckduckgo.com/c/'))
-        .slice(0, MAX_RELATED_TOPICS);
-
-      if (relevantTopics.length > 0) {
+      const extractedTexts = extractTopicTexts(result.RelatedTopics, MAX_RELATED_TOPICS);
+      if (extractedTexts.length > 0) {
         context += 'Related Information:\n';
-        relevantTopics.forEach(topic => {
-          if (topic.Text) { // Ensure topic.Text is not undefined
-            context += `- ${topic.Text.replace(/<[^>]*>?/gm, '')}`; // Strip HTML tags
-            if (topic.FirstURL) {
-              context += ` (More: ${topic.FirstURL})\n`;
-            } else {
-              context += '\n';
-            }
-          }
+        extractedTexts.forEach(text => {
+          context += `- ${text}\n`;
         });
         context += '---\n';
       }
