@@ -4,6 +4,7 @@
 import * as React from 'react';
 import { generateFlashcards } from '@/ai/flows/generate-flashcards';
 import { extractTextFromPdf } from '@/ai/flows/extract-text-from-pdf-flow';
+import { speechToText } from '@/ai/flows/speech-to-text-flow'; // Import the new flow
 import { searchDuckDuckGo } from '@/app/actions/search-actions';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -13,7 +14,7 @@ import { Switch } from '@/components/ui/switch';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
 import type { FlashcardType, QuizQuestionType, Message } from '@/types';
-import { Bot, User, Loader2, Send, FileText, Settings2, AlertTriangle, X, Search, BarChart3 } from 'lucide-react';
+import { Bot, User, Loader2, Send, FileText, Settings2, AlertTriangle, X, Search, BarChart3, Mic, MicOff, AudioLines } from 'lucide-react'; // Added Mic, MicOff, AudioLines
 import { Avatar, AvatarFallback } from './ui/avatar';
 import { cn } from '@/lib/utils';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -43,6 +44,13 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
   const [useDuckDuckGoSearch, setUseDuckDuckGoSearch] = React.useState<boolean>(false);
   const [difficulty, setDifficulty] = React.useState<string>("Medium");
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Speech-to-text states
+  const [isRecording, setIsRecording] = React.useState(false);
+  const [isTranscribing, setIsTranscribing] = React.useState(false);
+  const mediaRecorderRef = React.useRef<MediaRecorder | null>(null);
+  const audioChunksRef = React.useRef<Blob[]>([]);
+  const [hasMicPermission, setHasMicPermission] = React.useState<boolean | null>(null);
 
 
   React.useEffect(() => {
@@ -401,7 +409,98 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
     }
   };
 
-  const anyLoading = isProcessingPdf || isSearchingWeb || isGeneratingContent;
+  const handleMicClick = async () => {
+    if (isRecording) {
+      mediaRecorderRef.current?.stop();
+      setIsRecording(false);
+      // Transcription will happen in onstop
+    } else {
+      // Request permission and start recording
+      try {
+        if (hasMicPermission === null) {
+           const systemMessagePerm: Message = { id: Date.now().toString() + 'system_mic_perm', role: 'system', content: 'Requesting microphone permission...', timestamp: new Date() };
+           setMessages(prev => [...prev, systemMessagePerm]);
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        setHasMicPermission(true);
+        
+        const systemMessageStart: Message = { id: Date.now().toString() + 'system_mic_start', role: 'system', content: 'Recording started...', timestamp: new Date() };
+        setMessages(prev => [...prev, systemMessageStart]);
+
+        mediaRecorderRef.current = new MediaRecorder(stream);
+        audioChunksRef.current = [];
+
+        mediaRecorderRef.current.ondataavailable = (event) => {
+          audioChunksRef.current.push(event.data);
+        };
+
+        mediaRecorderRef.current.onstop = async () => {
+          stream.getTracks().forEach(track => track.stop()); // Stop mic access
+          const audioBlob = new Blob(audioChunksRef.current, { type: audioChunksRef.current[0]?.type || 'audio/webm' }); // Use first chunk's type or default
+          audioChunksRef.current = [];
+          
+          if (audioBlob.size === 0) {
+            toast({ title: 'Audio Error', description: 'No audio recorded.', variant: 'destructive' });
+            const systemMessageNoAudio: Message = { id: Date.now().toString() + 'system_mic_no_audio', role: 'system', content: <p className="font-semibold text-destructive">No audio was recorded.</p>, timestamp: new Date() };
+            setMessages(prev => [...prev, systemMessageNoAudio]);
+            return;
+          }
+
+          setIsTranscribing(true);
+          const systemMessageTranscribing: Message = { id: Date.now().toString() + 'system_mic_transcribing', role: 'system', content: 'Transcribing audio...', timestamp: new Date() };
+          setMessages(prev => [...prev, systemMessageTranscribing]);
+
+          const reader = new FileReader();
+          reader.readAsDataURL(audioBlob);
+          reader.onloadend = async () => {
+            const audioDataUri = reader.result as string;
+            try {
+              const result = await speechToText({ audioDataUri });
+              if (result.transcribedText) {
+                setPrompt(prev => prev ? `${prev.trim()} ${result.transcribedText}` : result.transcribedText);
+                toast({ title: 'Transcription Successful', description: 'Text added to prompt.' });
+                const systemMessageSuccess: Message = { id: Date.now().toString() + 'system_mic_success', role: 'system', content: <p className="font-semibold text-green-600 dark:text-green-400">Transcription successful. Text added to prompt.</p>, timestamp: new Date() };
+                setMessages(prev => [...prev, systemMessageSuccess]);
+              } else {
+                toast({ title: 'Transcription Empty', description: 'AI did not return any text.', variant: 'default' });
+                 const systemMessageEmptyTranscription: Message = { id: Date.now().toString() + 'system_mic_empty_transcription', role: 'system', content: <p className="font-semibold text-orange-500 dark:text-orange-400">Transcription returned no text.</p>, timestamp: new Date() };
+                setMessages(prev => [...prev, systemMessageEmptyTranscription]);
+              }
+            } catch (transcriptionError: any) {
+              console.error('Speech-to-text error:', transcriptionError);
+              toast({ title: 'Transcription Error', description: transcriptionError.message || 'Could not transcribe audio.', variant: 'destructive' });
+              const systemMessageError: Message = { id: Date.now().toString() + 'system_mic_trans_error', role: 'system', content: <p className="font-semibold text-destructive">Error during transcription: {transcriptionError.message}</p>, timestamp: new Date() };
+              setMessages(prev => [...prev, systemMessageError]);
+            } finally {
+              setIsTranscribing(false);
+            }
+          };
+           reader.onerror = () => {
+             toast({ title: 'File Read Error', description: 'Could not process recorded audio.', variant: 'destructive'});
+             setIsTranscribing(false);
+              const systemMessageReadError: Message = { id: Date.now().toString() + 'system_mic_read_error', role: 'system', content: <p className="font-semibold text-destructive">Error processing recorded audio data.</p>, timestamp: new Date() };
+              setMessages(prev => [...prev, systemMessageReadError]);
+           }
+        };
+        mediaRecorderRef.current.start();
+        setIsRecording(true);
+
+      } catch (error: any) {
+        console.error('Error accessing microphone:', error);
+        setHasMicPermission(false);
+        toast({
+          title: 'Microphone Access Denied',
+          description: 'Please enable microphone permissions in your browser settings.',
+          variant: 'destructive',
+        });
+         const systemMessageDenied: Message = { id: Date.now().toString() + 'system_mic_denied', role: 'system', content: <p className="font-semibold text-destructive">Microphone permission denied or microphone not found.</p>, timestamp: new Date() };
+        setMessages(prev => [...prev, systemMessageDenied]);
+      }
+    }
+  };
+
+  const anyLoading = isProcessingPdf || isSearchingWeb || isGeneratingContent || isTranscribing;
+  const micButtonDisabled = anyLoading || (isRecording && isTranscribing); // Disable mic if general loading or currently transcribing
 
   return (
     <div className="flex flex-col h-full max-h-[calc(var(--min-content-height,75vh)+160px)] md:max-h-[calc(var(--min-content-height,70vh)+180px)]">
@@ -456,6 +555,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
                     <span>
                       {isProcessingPdf ? 'Processing PDF...' :
                        isSearchingWeb ? 'Searching web...' :
+                       isTranscribing ? 'Transcribing audio...' :
                        isGeneratingContent ? 'Generating content...' : 'Loading...'}
                     </span>
                   </div>
@@ -560,7 +660,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="flex gap-2 border-t pt-4 px-1">
+      <form onSubmit={handleSubmit} className="flex gap-2 border-t pt-4 px-1 items-end">
         <Textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
@@ -570,14 +670,30 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
           disabled={anyLoading}
         />
         <Button 
+          type="button"
+          variant="outline"
+          size="icon"
+          onClick={handleMicClick}
+          disabled={micButtonDisabled}
+          className={cn("h-auto p-2.5 aspect-square", isRecording && "bg-destructive text-destructive-foreground hover:bg-destructive/90")}
+          aria-label={isRecording ? "Stop recording" : "Start recording"}
+        >
+          {isRecording && !isTranscribing && <MicOff className="h-5 w-5" />}
+          {!isRecording && !isTranscribing && <Mic className="h-5 w-5" />}
+          {isTranscribing && <AudioLines className="h-5 w-5 animate-pulse" />}
+        </Button>
+        <Button 
           type="submit" 
           disabled={anyLoading || (!prompt.trim() && !extractedPdfText)} 
           className="h-auto px-4 md:px-6 shadow-md hover:shadow-lg transition-shadow"
         >
-          {anyLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+          {isGeneratingContent ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
           <span className="sr-only">Generate</span>
         </Button>
       </form>
+       {hasMicPermission === false && (
+        <p className="text-xs text-destructive text-center mt-1">Microphone permission denied. Please enable it in browser settings.</p>
+      )}
     </div>
   );
 }
