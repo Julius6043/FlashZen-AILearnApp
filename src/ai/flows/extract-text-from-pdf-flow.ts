@@ -9,7 +9,7 @@
 
 import { ai } from '@/ai/genkit';
 import { z } from 'genkit';
-import pdf from 'pdf-parse';
+// Removed static import: import pdf from 'pdf-parse';
 
 const ExtractTextFromPdfInputSchema = z.object({
   pdfDataUri: z.string().describe(
@@ -34,6 +34,9 @@ const extractTextFromPdfFlow = ai.defineFlow(
     outputSchema: ExtractTextFromPdfOutputSchema,
   },
   async (input) => {
+    // Dynamically import pdf-parse
+    const pdf = (await import('pdf-parse')).default;
+
     try {
       if (!input.pdfDataUri.startsWith('data:application/pdf;base64,')) {
         throw new Error('Invalid PDF Data URI format. Expected "data:application/pdf;base64,<data>".');
