@@ -35,12 +35,10 @@ const textToSpeechFlow = ai.defineFlow(
   async (input) => {
     // Use ai.generate for direct model interaction for specific modalities
     const { media } = await ai.generate({
-      model: 'googleai/gemini-2.0-flash-exp', // Model capable of media generation
+      model: 'googleai/gemini-2.0-flash-exp', // Changed model to gemini-2.0-flash-exp
       prompt: `Please read the following text aloud: ${input.textToSpeak}`,
       config: {
-        // Changed from ['TEXT', 'AUDIO'] to ['AUDIO'] based on the error message:
-        // "Model does not support the requested response modalities: audio,text."
-        // This implies that for this model and task, only 'AUDIO' should be requested.
+        // Ensure responseModalities is ['AUDIO'] as per previous fix for gemini-2.0-flash-exp
         responseModalities: ['AUDIO'], 
       },
     });
@@ -54,3 +52,4 @@ const textToSpeechFlow = ai.defineFlow(
     return { audioDataUri: media.url };
   }
 );
+
