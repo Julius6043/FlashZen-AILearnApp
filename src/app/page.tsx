@@ -8,7 +8,7 @@ import { GenerateTab } from '@/components/GenerateTab';
 import { FlashcardsTab } from '@/components/FlashcardsTab';
 import { QuizTab } from '@/components/QuizTab';
 import type { FlashcardType, QuizQuestionType, ExportedDataType } from '@/types';
-import { Wand2, Layers, ClipboardCheck, Icon, Upload, Download, AlertTriangle } from 'lucide-react';
+import { Wand2, Layers, ClipboardCheck, Icon, Upload, Download, AlertTriangle, Loader2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import {
   AlertDialog,
@@ -20,6 +20,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { generateFlashcards } from '@/ai/flows/generate-flashcards';
+
 
 type TabValue = 'generate' | 'flashcards' | 'quiz';
 
@@ -29,11 +31,6 @@ interface TabConfig {
   icon: Icon;
   disabled?: (flashcards: FlashcardType[], quizQuestions: QuizQuestionType[]) => boolean;
   component: React.FC<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-}
-
-interface PendingAction {
-  newFlashcards: FlashcardType[];
-  newQuizQuestions?: QuizQuestionType[];
 }
 
 export default function HomePage() {
@@ -46,6 +43,7 @@ export default function HomePage() {
   const [isConfirmationDialogOpen, setIsConfirmationDialogOpen] = React.useState(false);
   const [confirmationDialogContent, setConfirmationDialogContent] = React.useState({ title: '', description: ''});
   const [onConfirmAction, setOnConfirmAction] = React.useState<(() => void) | null>(null);
+  const [isExpanding, setIsExpanding] = React.useState(false);
 
 
   const actuallyUpdateFlashcards = (
@@ -58,7 +56,6 @@ export default function HomePage() {
     if (newFlashcards.length > 0) {
       setActiveTab('flashcards');
     } else {
-      // if generating resulted in empty, or import was empty, stay/go to generate
       setActiveTab('generate'); 
     }
   };
@@ -73,10 +70,112 @@ export default function HomePage() {
         title: "Overwrite Existing Content?",
         description: `You have existing flashcards${quizQuestions.length > 0 ? ' and quiz questions' : ''}. ${source === 'generate' ? 'Generating new content' : 'Importing data'} will replace your current set. Are you sure you want to proceed?`
       });
+      // Wrap the call to actuallyUpdateFlashcards within another function for setOnConfirmAction
       setOnConfirmAction(() => () => actuallyUpdateFlashcards(newFlashcards, newQuizQuestions));
       setIsConfirmationDialogOpen(true);
     } else {
       actuallyUpdateFlashcards(newFlashcards, newQuizQuestions);
+       if (source === 'import') {
+         toast({ title: 'Import Successful', description: 'Flashcards and quiz data loaded.' });
+       }
+    }
+  };
+
+  const handleExpandItems = async (
+    type: 'flashcards' | 'quiz',
+    count: number
+  ) => {
+    if (count <= 0) {
+      toast({ title: 'Invalid Count', description: 'Number of items to expand must be positive.', variant: 'destructive'});
+      return;
+    }
+    setIsExpanding(true);
+    const toastId = `expanding-${type}-${Date.now()}`;
+    toast({
+      id: toastId,
+      title: `Expanding ${type}...`,
+      description: (
+        <div className="flex items-center">
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          Generating {count} new {type}...
+        </div>
+      ),
+      duration: Infinity, // Keep toast until explicitly dismissed
+    });
+
+    const promptForExpansion = type === 'flashcards'
+      ? `Expand the current flashcards with ${count} new, related items. Ensure they are distinct from the existing ones.`
+      : `Expand the current quiz with ${count} new, related multiple-choice questions based on the flashcards and existing quiz items. Ensure they are distinct.`;
+
+    try {
+      const result = await generateFlashcards({
+        prompt: promptForExpansion,
+        existingFlashcardsJson: JSON.stringify(flashcards),
+        existingQuizQuestionsJson: quizQuestions.length > 0 ? JSON.stringify(quizQuestions) : undefined,
+        numFlashcards: type === 'flashcards' ? count : 0,
+        numQuizQuestions: type === 'quiz' ? count : 0,
+      });
+
+      let newGeneratedFlashcards: FlashcardType[] = [];
+      let newGeneratedQuizQuestions: QuizQuestionType[] = [];
+      let parseError = false;
+
+      try {
+        if (result.flashcards && result.flashcards !== "[]") {
+          const parsedFc = JSON.parse(result.flashcards);
+          if (Array.isArray(parsedFc)) {
+            newGeneratedFlashcards = parsedFc.map((item: any, index: number) => ({
+              id: item.id || `exp-fc-${Date.now()}-${flashcards.length + index}`,
+              question: item.question || '',
+              answer: item.answer || '',
+            })).filter(fc => fc.question && fc.answer);
+          } else { throw new Error("Flashcards not an array");}
+        }
+      } catch (e) {
+        console.error("Error parsing expanded flashcards:", e);
+        toast({ title: 'Expansion Error', description: 'Failed to parse newly generated flashcards.', variant: 'destructive' });
+        parseError = true;
+      }
+
+      try {
+        if (result.quizQuestions && result.quizQuestions !== "[]") {
+          const parsedQz = JSON.parse(result.quizQuestions);
+          if (Array.isArray(parsedQz)) {
+            newGeneratedQuizQuestions = parsedQz.map((item: any, index: number) => ({
+              id: item.id || `exp-qz-${Date.now()}-${quizQuestions.length + index}`,
+              question: item.question || '',
+              options: Array.isArray(item.options) ? item.options : [],
+              correctAnswer: item.correctAnswer || '',
+            })).filter(qz => qz.question && qz.options.length > 1 && qz.correctAnswer && qz.options.includes(qz.correctAnswer));
+          } else { throw new Error("Quiz questions not an array");}
+        }
+      } catch (e) {
+        console.error("Error parsing expanded quiz questions:", e);
+        toast({ title: 'Expansion Error', description: 'Failed to parse newly generated quiz questions.', variant: 'destructive' });
+        parseError = true;
+      }
+
+      if (!parseError) {
+        if (type === 'flashcards' && newGeneratedFlashcards.length > 0) {
+          setFlashcards(prev => [...prev, ...newGeneratedFlashcards]);
+          toast.update(toastId, { title: 'Expansion Successful!', description: `${newGeneratedFlashcards.length} new flashcards added.`, duration: 5000 });
+        } else if (type === 'quiz' && newGeneratedQuizQuestions.length > 0) {
+          setQuizQuestions(prev => [...prev, ...newGeneratedQuizQuestions]);
+          toast.update(toastId, { title: 'Expansion Successful!', description: `${newGeneratedQuizQuestions.length} new quiz questions added.`, duration: 5000 });
+        } else {
+           toast.update(toastId, { title: 'Expansion Note', description: `No new ${type} were generated, or the AI returned empty results.`, duration: 5000 });
+        }
+      } else {
+        toast.dismiss(toastId); // Dismiss loading toast if there was a parse error already handled
+      }
+
+    } catch (error: any) {
+      console.error(`Error expanding ${type}:`, error);
+      toast.update(toastId, { title: 'Expansion Failed', description: `Could not generate additional ${type}: ${error.message}`, variant: 'destructive', duration: 5000 });
+    } finally {
+      setIsExpanding(false);
+      // Ensure any persistent toast is dismissed if not updated to success/failure
+      setTimeout(() => toast.dismiss(toastId), 500);
     }
   };
 
@@ -93,18 +192,17 @@ export default function HomePage() {
       label: 'Flashcards',
       icon: Layers,
       disabled: (cards, _quizItems) => cards.length === 0,
-      component: () => <FlashcardsTab flashcards={flashcards} />,
+      component: () => <FlashcardsTab flashcards={flashcards} onExpandItems={handleExpandItems} isExpanding={isExpanding} />,
     },
     {
       value: 'quiz',
       label: 'Quiz',
       icon: ClipboardCheck,
       disabled: (cards, quizItems) => {
-         // Quiz can be generated from AI questions OR from at least 2 flashcards
-        if (quizItems.length > 0) return false; // AI questions exist
-        return cards.length < 2; // Not enough flashcards for auto-quiz
+        if (quizItems.length > 0) return false; 
+        return cards.length < 2; 
       },
-      component: () => <QuizTab flashcards={flashcards} aiQuizQuestions={quizQuestions} />,
+      component: () => <QuizTab flashcards={flashcards} aiQuizQuestions={quizQuestions} onExpandItems={handleExpandItems} isExpanding={isExpanding} />,
     },
   ];
 
@@ -145,11 +243,7 @@ export default function HomePage() {
         }
         
         requestFlashcardUpdate(parsedData.flashcards, importedQuizQuestions, 'import');
-        // Toast for success will be shown after confirmation if any, or directly
-        if (!(flashcards.length > 0 || quizQuestions.length > 0)) { // if no existing content, toast now
-            toast({ title: 'Import Successful', description: 'Flashcards and quiz data loaded.' });
-        }
-
+        
       } catch (error: any) {
         console.error("Error importing JSON:", error);
         toast({ title: 'Import Error', description: `Failed to parse or validate JSON file: ${error.message}`, variant: 'destructive' });
@@ -196,7 +290,7 @@ export default function HomePage() {
             <TabsTrigger
               key={tab.value}
               value={tab.value}
-              disabled={tab.disabled?.(flashcards, quizQuestions)}
+              disabled={tab.disabled?.(flashcards, quizQuestions) || isExpanding}
               className="py-3 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-md transition-all duration-200 ease-in-out"
             >
               <tab.icon className="w-5 h-5 mr-2" />
@@ -218,6 +312,7 @@ export default function HomePage() {
           ref={fileInputRef}
           style={{ display: 'none' }}
           onChange={handleFileUpload}
+          disabled={isExpanding}
         />
         {hasContent ? (
           <Button
@@ -225,6 +320,7 @@ export default function HomePage() {
             size="lg"
             className="rounded-full shadow-xl p-4 h-auto aspect-square md:aspect-auto md:px-6"
             aria-label="Download data"
+            disabled={isExpanding}
           >
             <Download className="w-6 h-6 md:mr-2" />
             <span className="hidden md:inline">Export</span>
@@ -235,6 +331,7 @@ export default function HomePage() {
             size="lg"
             className="rounded-full shadow-xl p-4 h-auto aspect-square md:aspect-auto md:px-6"
             aria-label="Upload data"
+            disabled={isExpanding}
           >
             <Upload className="w-6 h-6 md:mr-2" />
              <span className="hidden md:inline">Import</span>
@@ -254,7 +351,7 @@ export default function HomePage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setOnConfirmAction(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel onClick={() => {setOnConfirmAction(null); setIsConfirmationDialogOpen(false);}}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
                 if (onConfirmAction) {

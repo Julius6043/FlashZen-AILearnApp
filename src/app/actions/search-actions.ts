@@ -26,8 +26,8 @@ const DuckDuckGoResponseSchema = z.object({
   DefinitionSource: z.string().optional(),
   DefinitionURL: z.string().optional(),
   RelatedTopics: z.array(DuckDuckGoTopicSchema).optional(),
-  Results: z.array(DuckDuckGoTopicSchema).optional(), // For disambiguation or list results
-  Type: z.string().optional(), // A (article), D (disambiguation), C (category), N (name), E (exclusive), P (redirect)
+  Results: z.array(DuckDuckGoTopicSchema).optional(), 
+  Type: z.string().optional(), 
 });
 
 
@@ -47,10 +47,9 @@ export async function searchDuckDuckGo(query: string): Promise<string | null> {
     });
 
     if (!response.ok) {
-      console.error(`DuckDuckGo API request failed with status: ${response.status}`);
       const errorBody = await response.text();
-      console.error(`Error body: ${errorBody}`);
-      return `Error: Failed to fetch from DuckDuckGo (status ${response.status}).`;
+      console.error(`DuckDuckGo API request failed with status: ${response.status}. Body: ${errorBody}`);
+      return `Error: Failed to fetch from DuckDuckGo (status ${response.status}). Please try again later or rephrase your query.`;
     }
 
     const data = await response.json();
@@ -58,15 +57,15 @@ export async function searchDuckDuckGo(query: string): Promise<string | null> {
 
     if (!parsedData.success) {
       console.error('Failed to parse DuckDuckGo API response:', parsedData.error.flatten());
-      return 'Error: Could not parse DuckDuckGo search results.';
+      return 'Error: Could not parse DuckDuckGo search results. The API might have changed its format.';
     }
 
     const result = parsedData.data;
     let context = '';
+    const MAX_CONTEXT_LENGTH = 2000; // Limit context length to avoid overly long prompts
 
     if (result.Heading && result.AbstractText && result.AbstractText.trim()) {
-      context += `Topic: ${result.Heading}\n`;
-      context += `Summary: ${result.AbstractText}\n`;
+      context += `Topic: ${result.Heading}\nSummary: ${result.AbstractText}\n`;
       if (result.AbstractURL) {
         context += `Source: ${result.AbstractURL}\n`;
       }
@@ -77,7 +76,9 @@ export async function searchDuckDuckGo(query: string): Promise<string | null> {
             context += `Source: ${result.AbstractURL}\n`;
         }
         context += '---\n';
-    } else if (result.Answer && result.Answer.trim()) {
+    }
+    
+    if (result.Answer && result.Answer.trim()) {
         context += `Direct Answer: ${result.Answer}\n`;
          if (result.AnswerType) {
             context += `Answer Type: ${result.AnswerType}\n`;
@@ -85,18 +86,28 @@ export async function searchDuckDuckGo(query: string): Promise<string | null> {
         context += '---\n';
     }
 
+    if (result.Definition && result.Definition.trim()) {
+      context += `Definition: ${result.Definition}\n`;
+      if (result.DefinitionSource) {
+        context += `Definition Source: ${result.DefinitionSource}\n`;
+      }
+      if (result.DefinitionURL) {
+        context += `Definition URL: ${result.DefinitionURL}\n`;
+      }
+      context += '---\n';
+    }
 
     const MAX_RELATED_TOPICS = 5;
     if (result.RelatedTopics && result.RelatedTopics.length > 0) {
       const relevantTopics = result.RelatedTopics
-        .filter(topic => topic.Text && !topic.Result?.startsWith('<a href="https://duckduckgo.com/c/')) // Filter out category topics
+        .filter(topic => topic.Text && topic.Text.trim() && !topic.Result?.includes('Category:') && !topic.Result?.startsWith('<a href="https://duckduckgo.com/c/'))
         .slice(0, MAX_RELATED_TOPICS);
 
       if (relevantTopics.length > 0) {
         context += 'Related Information:\n';
         relevantTopics.forEach(topic => {
-          if (topic.Text) {
-            context += `- ${topic.Text}`;
+          if (topic.Text) { // Ensure topic.Text is not undefined
+            context += `- ${topic.Text.replace(/<[^>]*>?/gm, '')}`; // Strip HTML tags
             if (topic.FirstURL) {
               context += ` (More: ${topic.FirstURL})\n`;
             } else {
@@ -108,14 +119,19 @@ export async function searchDuckDuckGo(query: string): Promise<string | null> {
       }
     }
     
-    if (context.trim() === "") {
-        return null; // No useful information extracted
+    const trimmedContext = context.trim();
+    if (trimmedContext === "") {
+        return `No specific information found for "${query}" via web search. Try a broader topic or different phrasing.`;
+    }
+    
+    if (trimmedContext.length > MAX_CONTEXT_LENGTH) {
+        return trimmedContext.substring(0, MAX_CONTEXT_LENGTH) + "... (context truncated)";
     }
 
-    return context.trim();
+    return trimmedContext;
 
   } catch (error: any) {
     console.error('Error fetching or processing DuckDuckGo API:', error);
-    return `Error: An unexpected error occurred while searching: ${error.message}`;
+    return `Error: An unexpected error occurred while searching: ${error.message}. Please check your network connection.`;
   }
 }
