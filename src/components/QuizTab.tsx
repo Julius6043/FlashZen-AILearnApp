@@ -1,3 +1,4 @@
+
 'use client';
 
 import * as React from 'react';
@@ -148,7 +149,7 @@ export function QuizTab({ flashcards, aiQuizQuestions }: QuizTabProps) {
 
   if (quizCompleted) {
     return (
-      <Card className="w-full max-w-lg mx-auto text-center shadow-xl">
+      <Card className="w-full max-w-2xl mx-auto text-center shadow-xl">
         <CardHeader>
           <CardTitle className="text-2xl">Quiz Completed!</CardTitle>
         </CardHeader>
@@ -173,7 +174,7 @@ export function QuizTab({ flashcards, aiQuizQuestions }: QuizTabProps) {
   }
 
   return (
-    <Card className="w-full max-w-lg mx-auto shadow-xl">
+    <Card className="w-full max-w-2xl mx-auto shadow-xl">
       <CardHeader>
         <CardTitle className="text-xl md:text-2xl">Question {currentQuestionIndex + 1} of {quizDisplayQuestions.length}</CardTitle>
         <CardDescription className="text-base pt-4 min-h-[60px]">{currentQuestion.question}</CardDescription>
@@ -212,7 +213,7 @@ export function QuizTab({ flashcards, aiQuizQuestions }: QuizTabProps) {
               aria-label={`Option: ${option}${isSelected ? ", selected" : ""}${isAnswered && isCorrectOption ? ", correct" : ""}${isAnswered && isSelected && !isCorrectOption ? ", incorrect" : ""}`}
             >
               {icon && <span className="mr-2">{icon}</span>}
-              <span className="flex-1">{option}</span>
+              <span className="flex-1 whitespace-normal">{option}</span>
             </Button>
           );
         })}
@@ -239,3 +240,4 @@ export function QuizTab({ flashcards, aiQuizQuestions }: QuizTabProps) {
     </Card>
   );
 }
+

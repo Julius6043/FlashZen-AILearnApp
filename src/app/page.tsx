@@ -1,3 +1,4 @@
+
 'use client';
 
 import * as React from 'react';
@@ -70,7 +71,7 @@ export default function HomePage() {
 
   return (
     <div className="flex flex-col items-center w-full">
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as TabValue)} className="w-full max-w-3xl">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as TabValue)} className="w-full max-w-5xl">
         <TabsList className="grid w-full grid-cols-3 mb-6 shadow-sm">
           {tabConfigs.map(tab => (
             <TabsTrigger
@@ -93,3 +94,4 @@ export default function HomePage() {
     </div>
   );
 }
+

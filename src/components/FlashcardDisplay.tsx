@@ -1,3 +1,4 @@
+
 'use client';
 
 import * as React from 'react';
@@ -34,7 +35,7 @@ export function FlashcardDisplay({ question, answer, isFlipped, onFlip }: Flashc
         <Card className="flashcard-back bg-card border-2 border-accent/50">
           <CardContent className="h-full">
             <ScrollArea className="h-full">
-              <p className="text-base md:text-lg">{answer}</p>
+              <p className="text-base md:text-lg">{isFlipped ? answer : ''}</p>
             </ScrollArea>
           </CardContent>
         </Card>
@@ -42,3 +43,4 @@ export function FlashcardDisplay({ question, answer, isFlipped, onFlip }: Flashc
     </div>
   );
 }
+
