@@ -9,7 +9,7 @@
 
 import { ai } from '@/ai/genkit';
 import { z } from 'genkit';
-// Removed static import: import pdf from 'pdf-parse';
+// pdf-parse will be required dynamically
 
 const ExtractTextFromPdfInputSchema = z.object({
   pdfDataUri: z.string().describe(
@@ -34,8 +34,17 @@ const extractTextFromPdfFlow = ai.defineFlow(
     outputSchema: ExtractTextFromPdfOutputSchema,
   },
   async (input) => {
-    // Dynamically import pdf-parse
-    const pdf = (await import('pdf-parse')).default;
+    let pdfParse;
+    try {
+      // Using require for the CJS module as an alternative to dynamic import()
+      // This might change how the module is loaded or initialized.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      pdfParse = require('pdf-parse');
+    } catch (importError: any) {
+      console.error('Error requiring pdf-parse:', importError);
+      // If pdf-parse itself fails to load, it's a critical issue.
+      throw new Error(`Failed to load PDF processing library: ${importError.message}`);
+    }
 
     try {
       if (!input.pdfDataUri.startsWith('data:application/pdf;base64,')) {
@@ -46,7 +55,8 @@ const extractTextFromPdfFlow = ai.defineFlow(
         throw new Error('Invalid PDF Data URI: Missing base64 data.');
       }
       const pdfBuffer = Buffer.from(base64Data, 'base64');
-      const data = await pdf(pdfBuffer);
+      // pdf-parse exports an async function directly
+      const data = await pdfParse(pdfBuffer); 
       return { extractedText: data.text };
     } catch (error: any) {
       console.error('Error extracting text from PDF:', error);
@@ -57,3 +67,4 @@ const extractTextFromPdfFlow = ai.defineFlow(
     }
   }
 );
+
