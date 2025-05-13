@@ -7,63 +7,74 @@ import { z } from 'zod';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const DuckDuckGoTopicSchema: z.ZodTypeAny = z.lazy(() =>
   z.object({
-    Result: z.string().optional(),
+    Result: z.string().optional().nullable(),
     Icon: z.object({
-      URL: z.string().optional(),
+      URL: z.string().optional().nullable(),
       Height: z.number().optional(),
       Width: z.number().optional(),
-    }).optional(),
-    FirstURL: z.string().optional(),
-    Text: z.string().optional(),
+    }).optional().nullable(),
+    FirstURL: z.string().optional().nullable(),
+    Text: z.string().optional().nullable(),
     // For categories/disambiguation groups
-    Name: z.string().optional(), // Name of the group
-    Topics: z.array(DuckDuckGoTopicSchema).optional(), // Array of sub-topics
+    Name: z.string().optional().nullable(), // Name of the group
+    Topics: z.array(z.lazy(() => DuckDuckGoTopicSchema.nullable())).optional().nullable(), // Array of sub-topics, elements can be null
   })
 );
 
 const DuckDuckGoResponseSchema = z.object({
-  Abstract: z.string().optional(), // Corrected from AbstractText
-  AbstractSource: z.string().optional(),
-  AbstractURL: z.string().optional(),
-  Image: z.string().optional(),
-  Heading: z.string().optional(),
-  Answer: z.string().optional(),
-  AnswerType: z.string().optional(),
-  Definition: z.string().optional(),
-  DefinitionSource: z.string().optional(),
-  DefinitionURL: z.string().optional(),
-  RelatedTopics: z.array(DuckDuckGoTopicSchema).optional(),
-  Results: z.array(DuckDuckGoTopicSchema).optional(), 
-  Type: z.string().optional(), 
+  Abstract: z.string().optional().nullable(),
+  AbstractSource: z.string().optional().nullable(),
+  AbstractURL: z.string().optional().nullable(),
+  Image: z.string().optional().nullable(),
+  Heading: z.string().optional().nullable(),
+  Answer: z.string().optional().nullable(),
+  AnswerType: z.string().optional().nullable(),
+  Definition: z.string().optional().nullable(),
+  DefinitionSource: z.string().optional().nullable(),
+  DefinitionURL: z.string().optional().nullable(),
+  RelatedTopics: z.array(z.lazy(() => DuckDuckGoTopicSchema.nullable())).optional().nullable(), // elements can be null
+  Results: z.array(z.lazy(() => DuckDuckGoTopicSchema.nullable())).optional().nullable(), // elements can be null
+  Type: z.string().optional().nullable(), 
 });
 
 type DuckDuckGoTopic = z.infer<typeof DuckDuckGoTopicSchema>;
 
 // Helper function to extract text from topics and sub-topics
-function extractTopicTexts(topics: DuckDuckGoTopic[] | undefined, maxTopics: number): string[] {
+function extractTopicTexts(topics: (DuckDuckGoTopic | null)[] | undefined | null, maxTopics: number): string[] {
   if (!topics) return [];
   const texts: string[] = [];
 
-  function processTopic(topic: DuckDuckGoTopic) {
-    if (texts.length >= maxTopics) return;
+  function processTopic(topic: DuckDuckGoTopic | null) {
+    if (!topic || texts.length >= maxTopics) return; // Handle null topic
 
-    if (topic.Text && topic.Text.trim() && !topic.Result?.includes('Category:') && !topic.Result?.startsWith('<a href="https://duckduckgo.com/c/')) {
-      let textToAdd = topic.Text.replace(/<[^>]*>?/gm, ''); // Strip HTML tags
-      if (topic.FirstURL) {
-        textToAdd += ` (More: ${topic.FirstURL})`;
+    const topicText = topic.Text;
+    const topicResult = topic.Result; // This can be string | null | undefined
+
+    if (topicText && topicText.trim()) {
+      // Check if topicResult is not a category link. If topicResult is null/undefined, it's not a category link.
+      const isNotCategoryLink = !topicResult || 
+                                (!topicResult.includes('Category:') && 
+                                 !topicResult.startsWith('<a href="https://duckduckgo.com/c/'));
+      
+      if (isNotCategoryLink) {
+        let textToAdd = topicText.replace(/<[^>]*>?/gm, ''); // Strip HTML tags
+        if (topic.FirstURL) {
+          textToAdd += ` (More: ${topic.FirstURL})`;
+        }
+        texts.push(textToAdd);
       }
-      texts.push(textToAdd);
     }
-
-    if (topic.Topics && topic.Topics.length > 0) {
-      for (const subTopic of topic.Topics) {
+    
+    const subTopics = topic.Topics;
+    if (subTopics && subTopics.length > 0) {
+      for (const subTopic of subTopics) { // subTopic can also be null now
         if (texts.length >= maxTopics) break;
-        processTopic(subTopic); // Recursive call
+        processTopic(subTopic); // Recursive call, processTopic handles null
       }
     }
   }
 
-  for (const topic of topics) {
+  for (const topic of topics) { // topic can be null if array elements are nullable
     if (texts.length >= maxTopics) break;
     processTopic(topic);
   }
@@ -104,14 +115,14 @@ export async function searchDuckDuckGo(query: string): Promise<string | null> {
     let context = '';
     const MAX_CONTEXT_LENGTH = 2000; // Limit context length to avoid overly long prompts
 
-    if (result.Heading && result.Abstract && result.Abstract.trim()) { // Changed AbstractText to Abstract
-      context += `Topic: ${result.Heading}\nSummary: ${result.Abstract}\n`; // Changed AbstractText to Abstract
+    if (result.Heading && result.Abstract && result.Abstract.trim()) {
+      context += `Topic: ${result.Heading}\nSummary: ${result.Abstract}\n`;
       if (result.AbstractURL) {
         context += `Source: ${result.AbstractURL}\n`;
       }
       context += '---\n';
-    } else if (result.Abstract && result.Abstract.trim()) { // Changed AbstractText to Abstract
-        context += `Search Result Summary: ${result.Abstract}\n`; // Changed AbstractText to Abstract
+    } else if (result.Abstract && result.Abstract.trim()) {
+        context += `Search Result Summary: ${result.Abstract}\n`;
         if (result.AbstractURL) {
             context += `Source: ${result.AbstractURL}\n`;
         }
