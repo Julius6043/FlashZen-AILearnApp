@@ -26,29 +26,28 @@ function shuffleArray<T>(array: T[]): T[] {
 }
 
 export function FlashcardsTab({ flashcards: initialFlashcards, onExpandItems, isExpanding }: FlashcardsTabProps) {
+  // displayedFlashcards is the list this component works with (can be a shuffled version of initialFlashcards)
   const [displayedFlashcards, setDisplayedFlashcards] = React.useState<FlashcardType[]>(initialFlashcards);
   const [currentIndex, setCurrentIndex] = React.useState(0);
   const [isFlipped, setIsFlipped] = React.useState(false);
   const [expandCountInput, setExpandCountInput] = React.useState("5");
 
-
   React.useEffect(() => {
-    // Only reset displayedFlashcards if the source initialFlashcards identity changes
-    // and it's not just an append (which would change identity but we want to keep current view)
-    // A more sophisticated check might be needed if appends become very frequent and disruptive
-    if (initialFlashcards !== displayedFlashcards && 
-        (initialFlashcards.length <= displayedFlashcards.length || 
-         !initialFlashcards.some(fc => displayedFlashcards.find(dfc => dfc.id === fc.id)))) {
-      setDisplayedFlashcards(initialFlashcards);
-      if (initialFlashcards.length > 0 && currentIndex >= initialFlashcards.length) {
-        setCurrentIndex(0);
-      }
-      setIsFlipped(false);
-    } else if (initialFlashcards.length > displayedFlashcards.length) {
-      // handles appends, update displayedFlashcards
-       setDisplayedFlashcards(initialFlashcards);
+    // When initialFlashcards (prop) changes, reset our internal displayedFlashcards.
+    // This means any shuffle is lost, and the user can re-shuffle the new/updated list.
+    // This handles new generations, imports, and expansions correctly.
+    setDisplayedFlashcards(initialFlashcards);
+    if (initialFlashcards.length > 0) {
+        // If current index is out of bounds for the new list, reset to 0
+        setCurrentIndex(prevIndex => Math.min(prevIndex, initialFlashcards.length - 1));
+        if (currentIndex >= initialFlashcards.length) { // Reset if out of bounds specifically
+             setCurrentIndex(0);
+        }
+    } else {
+        setCurrentIndex(0); // No cards, index must be 0
     }
-  }, [initialFlashcards, currentIndex, displayedFlashcards]);
+    setIsFlipped(false); // Reset flip state for new card or new list
+  }, [initialFlashcards]);
 
 
   if (displayedFlashcards.length === 0) {
@@ -64,13 +63,15 @@ export function FlashcardsTab({ flashcards: initialFlashcards, onExpandItems, is
   }
 
   const currentCard = displayedFlashcards[currentIndex];
-   if (!currentCard) { // Should not happen if displayedFlashcards.length > 0
+   if (!currentCard) {
+    // This case should ideally not be reached if displayedFlashcards.length > 0 and currentIndex is managed.
+    // But as a fallback:
     return (
       <Alert variant="destructive">
         <Info className="h-4 w-4" />
         <AlertTitle>Error</AlertTitle>
         <AlertDescription>
-          Could not load current flashcard. Please try again.
+          Could not load current flashcard. Please try restarting or generating new cards.
         </AlertDescription>
       </Alert>
     );
@@ -78,13 +79,13 @@ export function FlashcardsTab({ flashcards: initialFlashcards, onExpandItems, is
 
 
   const handleNext = () => {
+    setIsFlipped(false); // Unflip before changing card
     setCurrentIndex((prevIndex) => (prevIndex + 1) % displayedFlashcards.length);
-    setIsFlipped(false);
   };
 
   const handlePrev = () => {
+    setIsFlipped(false); // Unflip before changing card
     setCurrentIndex((prevIndex) => (prevIndex - 1 + displayedFlashcards.length) % displayedFlashcards.length);
-    setIsFlipped(false);
   };
 
   const handleFlip = () => {
@@ -92,7 +93,7 @@ export function FlashcardsTab({ flashcards: initialFlashcards, onExpandItems, is
   };
 
   const handleShuffle = () => {
-    setDisplayedFlashcards(shuffleArray(displayedFlashcards));
+    setDisplayedFlashcards(currentCards => shuffleArray([...currentCards]));
     setCurrentIndex(0);
     setIsFlipped(false);
   }
@@ -100,7 +101,8 @@ export function FlashcardsTab({ flashcards: initialFlashcards, onExpandItems, is
   const handleExpand = () => {
     const count = parseInt(expandCountInput, 10);
     if (isNaN(count) || count <= 0) {
-      alert("Please enter a valid positive number for expansion."); // Basic validation, use toast in real app
+      // Consider using toast for errors
+      alert("Please enter a valid positive number for expansion.");
       return;
     }
     onExpandItems('flashcards', count);
@@ -108,29 +110,46 @@ export function FlashcardsTab({ flashcards: initialFlashcards, onExpandItems, is
 
   return (
     <div className="flex flex-col items-center gap-6">
-      <div className="w-full max-w-md">
-        <FlashcardDisplay
-          question={currentCard.question}
-          answer={isFlipped ? currentCard.answer : ""}
-          isFlipped={isFlipped}
-          onFlip={handleFlip}
-        />
+      <div className="flex items-center justify-center gap-1 md:gap-2 w-full max-w-xl px-2 sm:px-0">
+        {displayedFlashcards.length > 1 && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handlePrev}
+            className="rounded-full shadow-md hover:shadow-lg transition-shadow bg-card/70 hover:bg-card p-2 disabled:opacity-30"
+            aria-label="Previous card"
+            disabled={isExpanding || displayedFlashcards.length <= 1}
+          >
+            <ChevronLeft className="h-7 w-7" />
+          </Button>
+        )}
+        <div className="w-full max-w-md flex-grow"> {/* Flashcard container takes up space */}
+          <FlashcardDisplay
+            question={currentCard.question}
+            answer={currentCard.answer} // Pass full answer
+            isFlipped={isFlipped}
+            onFlip={handleFlip}
+          />
+        </div>
+        {displayedFlashcards.length > 1 && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleNext}
+            className="rounded-full shadow-md hover:shadow-lg transition-shadow bg-card/70 hover:bg-card p-2 disabled:opacity-30"
+            aria-label="Next card"
+            disabled={isExpanding || displayedFlashcards.length <= 1}
+          >
+            <ChevronRight className="h-7 w-7" />
+          </Button>
+        )}
       </div>
+
       <div className="text-center text-sm text-muted-foreground">
         Card {currentIndex + 1} of {displayedFlashcards.length}
       </div>
+
       <div className="flex flex-wrap justify-center items-center gap-3 md:gap-4 w-full">
-        <Button
-          variant="outline"
-          size="lg"
-          onClick={handlePrev}
-          className="shadow-md hover:shadow-lg transition-shadow"
-          aria-label="Previous card"
-          disabled={isExpanding}
-        >
-          <ChevronLeft className="h-5 w-5 md:mr-2" />
-          <span className="hidden md:inline">Prev</span>
-        </Button>
         <Button
           variant="default"
           size="lg"
@@ -141,17 +160,6 @@ export function FlashcardsTab({ flashcards: initialFlashcards, onExpandItems, is
         >
           <RefreshCw className="h-5 w-5 mr-2" />
           Flip
-        </Button>
-        <Button
-          variant="outline"
-          size="lg"
-          onClick={handleNext}
-          className="shadow-md hover:shadow-lg transition-shadow"
-          aria-label="Next card"
-          disabled={isExpanding}
-        >
-          <span className="hidden md:inline">Next</span>
-          <ChevronRight className="h-5 w-5 md:ml-2" />
         </Button>
          {displayedFlashcards.length > 1 && (
           <Button
@@ -164,6 +172,7 @@ export function FlashcardsTab({ flashcards: initialFlashcards, onExpandItems, is
           >
             <ShuffleIcon className="h-5 w-5 md:mr-2" />
             <span className="hidden md:inline">Shuffle</span>
+             <span className="md:hidden">Shuffle</span>
           </Button>
         )}
       </div>
