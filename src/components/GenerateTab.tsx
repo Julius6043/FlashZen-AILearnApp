@@ -1,3 +1,4 @@
+
 'use client';
 
 import * as React from 'react';
@@ -10,12 +11,16 @@ import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
 import type { FlashcardType, QuizQuestionType, Message } from '@/types';
-import { Bot, User, Loader2, Send, FileText, Settings2, AlertTriangle } from 'lucide-react';
+import { Bot, User, Loader2, Send, FileText, Settings2, AlertTriangle, X } from 'lucide-react';
 import { Avatar, AvatarFallback } from './ui/avatar';
 import { cn } from '@/lib/utils';
 
 interface GenerateTabProps {
-  onFlashcardsAndQuizGenerated: (flashcards: FlashcardType[], quizQuestions?: QuizQuestionType[]) => void;
+  onFlashcardsAndQuizGenerated: (
+    flashcards: FlashcardType[], 
+    quizQuestions?: QuizQuestionType[],
+    source?: 'generate' | 'import' // Added source for confirmation dialog context
+  ) => void;
 }
 
 export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) {
@@ -30,6 +35,8 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
   const [extractedPdfText, setExtractedPdfText] = React.useState<string | null>(null);
   const [numFlashcards, setNumFlashcards] = React.useState<number>(10);
   const [numQuizQuestions, setNumQuizQuestions] = React.useState<number>(5);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
 
   React.useEffect(() => {
     if (scrollAreaRef.current) {
@@ -37,21 +44,33 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
     }
   }, [messages]);
 
+  const clearPdfFile = () => {
+    setPdfFile(null);
+    setExtractedPdfText(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''; // Reset the file input
+    }
+     const systemMessageClear: Message = {
+        id: Date.now().toString() + 'system_pdf_cleared',
+        role: 'system',
+        content: <p className="font-semibold">PDF selection cleared.</p>,
+        timestamp: new Date(),
+      };
+    setMessages(prev => [...prev, systemMessageClear]);
+  };
+
+
   const handlePdfFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
       if (file.type !== 'application/pdf') {
         toast({ title: 'Invalid File Type', description: 'Please upload a PDF file.', variant: 'destructive' });
-        setPdfFile(null);
-        setExtractedPdfText(null);
-        event.target.value = ''; // Reset file input
+        clearPdfFile();
         return;
       }
       if (file.size > 5 * 1024 * 1024) { // 5MB limit
         toast({ title: 'File Too Large', description: 'Please upload a PDF smaller than 5MB.', variant: 'destructive' });
-        setPdfFile(null);
-        setExtractedPdfText(null);
-        event.target.value = ''; // Reset file input
+        clearPdfFile();
         return;
       }
 
@@ -78,7 +97,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
               role: 'system',
               content: (
                 <div>
-                  <p className="font-semibold text-green-600">Successfully extracted text from {file.name}.</p>
+                  <p className="font-semibold text-green-600 dark:text-green-400">Successfully extracted text from {file.name}.</p>
                   <p className="text-xs text-muted-foreground">Length: {result.extractedText.length} characters.</p>
                 </div>
               ),
@@ -87,11 +106,11 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
             setMessages(prev => [...prev, systemMessageSuccess]);
             toast({ title: 'PDF Processed', description: `Text extracted from ${file.name}.` });
           } else {
-             setExtractedPdfText(null);
+             setExtractedPdfText(null); // Keep PDF file object for name display, but no text
              const systemMessageEmpty: Message = {
               id: Date.now().toString() + 'system_pdf_empty',
               role: 'system',
-              content: <p className="font-semibold text-orange-500">Could not extract text or PDF is empty: {file.name}.</p>,
+              content: <p className="font-semibold text-orange-500 dark:text-orange-400">Could not extract text or PDF is empty: {file.name}.</p>,
               timestamp: new Date(),
             };
             setMessages(prev => [...prev, systemMessageEmpty]);
@@ -104,7 +123,6 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
         };
       } catch (error: any) {
         console.error('Error processing PDF:', error);
-        setExtractedPdfText(null);
         const systemMessageError: Message = {
           id: Date.now().toString() + 'system_pdf_error',
           role: 'system',
@@ -114,12 +132,10 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
         setMessages(prev => [...prev, systemMessageError]);
         toast({ title: 'PDF Error', description: `Could not process PDF: ${error.message}`, variant: 'destructive' });
         setIsProcessingPdf(false);
-        setPdfFile(null); 
-        event.target.value = ''; // Reset file input
+        clearPdfFile();
       }
     } else {
-      setPdfFile(null);
-      setExtractedPdfText(null);
+      clearPdfFile();
     }
   };
 
@@ -140,11 +156,11 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
       timestamp: new Date(),
     };
     setMessages(prev => [...prev, userMessage]);
-    if (prompt.trim()) setPrompt('');
+    if (prompt.trim()) setPrompt(''); // Clear prompt only if it was used
 
     try {
       const result = await generateFlashcards({ 
-        prompt: userMessage.content as string,
+        prompt: userMessage.content as string, // Prompt is always present now
         pdfText: extractedPdfText ?? undefined,
         numFlashcards,
         numQuizQuestions: numQuizQuestions > 0 ? numQuizQuestions : undefined,
@@ -165,7 +181,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
         
         const rawParsedFc = JSON.parse(jsonString);
         if (Array.isArray(rawParsedFc)) {
-          parsedFlashcards = rawParsedFc.map((item: any, index: number) => ({ // eslint-disable-line @typescript-eslint/no-explicit-any
+          parsedFlashcards = rawParsedFc.map((item: any, index: number) => ({ 
             id: item.id || `fc-${Date.now()}-${index}`,
             question: item.question || item.front || '',
             answer: item.answer || item.back || '',
@@ -176,7 +192,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
         if (parsedFlashcards.length === 0 && result.flashcards !== "[]") {
            throw new Error('No valid flashcards generated from non-empty AI response.');
         }
-      } catch (parseError: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+      } catch (parseError: any) { 
         console.error('Error parsing flashcards JSON:', parseError);
         flashcardParseError = parseError.message;
       }
@@ -191,7 +207,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
           }
           const rawParsedQuiz = JSON.parse(quizJsonString);
           if (Array.isArray(rawParsedQuiz)) {
-            parsedQuizQuestions = rawParsedQuiz.map((item: any, index: number) => ({ // eslint-disable-line @typescript-eslint/no-explicit-any
+            parsedQuizQuestions = rawParsedQuiz.map((item: any, index: number) => ({ 
               id: item.id || `qz-${Date.now()}-${index}`,
               question: item.question || '',
               options: Array.isArray(item.options) ? item.options : [],
@@ -203,7 +219,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
            if (parsedQuizQuestions.length === 0 && result.quizQuestions !== "[]") {
             throw new Error('No valid quiz questions generated from non-empty AI response.');
           }
-        } catch (parseError: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+        } catch (parseError: any) { 
           console.error('Error parsing quiz questions JSON:', parseError);
           quizParseError = parseError.message;
         }
@@ -267,16 +283,19 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
       };
       setMessages(prev => [...prev, aiMessage]);
 
-      if (parsedFlashcards.length > 0) {
-        onFlashcardsAndQuizGenerated(parsedFlashcards, parsedQuizQuestions);
-        toast({ title: 'Success', description: `${parsedFlashcards.length} flashcards generated. ${parsedQuizQuestions ? `${parsedQuizQuestions.length} quiz questions generated.` : ''}` });
-      } else if (flashcardParseError || quizParseError) {
-         toast({ title: 'Parsing Error', description: 'Could not fully parse the AI response. Check details.', variant: 'destructive' });
-      } else {
+      // Use the callback from HomePage which might trigger a confirmation
+      onFlashcardsAndQuizGenerated(parsedFlashcards, parsedQuizQuestions, 'generate');
+
+      // Toast messages will be handled by HomePage after confirmation or directly.
+      // For local errors before calling onFlashcardsAndQuizGenerated:
+      if (parsedFlashcards.length === 0 && (flashcardParseError || quizParseError)) {
+         toast({ title: 'Parsing Error', description: 'Could not fully parse the AI response. Check details in chat.', variant: 'destructive' });
+      } else if (parsedFlashcards.length === 0 && !flashcardParseError && !quizParseError) {
          toast({ title: 'No Content', description: 'AI did not generate valid flashcards or quiz questions.', variant: 'default' });
       }
 
-    } catch (error: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+
+    } catch (error: any) { 
       console.error('Error generating content:', error);
       const errorMessage = error.message || 'An unknown error occurred.';
       const aiErrorMessage: Message = {
@@ -314,14 +333,14 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
               className={cn(
                 "flex items-start gap-3 p-3 rounded-lg shadow-sm max-w-[90%]",
                 msg.role === 'user' ? 'ml-auto bg-primary text-primary-foreground' 
-                  : msg.role === 'system' ? 'mx-auto bg-amber-100 text-amber-800 border border-amber-300 text-sm' 
+                  : msg.role === 'system' ? 'mx-auto bg-amber-100 text-amber-800 dark:bg-amber-800/30 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-sm' 
                   : 'bg-muted'
               )}
             >
               <Avatar className={cn("w-8 h-8", msg.role === 'system' && "hidden sm:flex")}>
                 <AvatarFallback>
                   {msg.role === 'user' ? <User size={18}/> : 
-                   msg.role === 'system' ? <AlertTriangle size={18} className="text-amber-600" /> : 
+                   msg.role === 'system' ? <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400" /> : 
                    <Bot size={18} />}
                 </AvatarFallback>
               </Avatar>
@@ -356,7 +375,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
       </ScrollArea>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4 px-1">
-        <div>
+        <div className="relative">
           <Label htmlFor="pdf-upload" className="flex items-center gap-2 mb-1 text-sm font-medium">
             <FileText size={16} /> Upload PDF (Optional)
           </Label>
@@ -365,11 +384,24 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
             type="file" 
             accept=".pdf" 
             onChange={handlePdfFileChange} 
+            ref={fileInputRef}
             className="text-sm file:mr-2 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-xs file:bg-muted file:text-muted-foreground hover:file:bg-primary/20"
             disabled={isLoading || isProcessingPdf}
           />
+          {pdfFile && (
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              className="absolute top-6 right-0 h-7 w-7" 
+              onClick={clearPdfFile}
+              disabled={isLoading || isProcessingPdf}
+              aria-label="Clear PDF file"
+            >
+              <X size={16} />
+            </Button>
+          )}
           {pdfFile && !isProcessingPdf && (
-            <p className="text-xs text-muted-foreground mt-1">
+            <p className="text-xs text-muted-foreground mt-1 truncate" title={pdfFile.name}>
               {extractedPdfText ? `Using: ${pdfFile.name}` : `Selected: ${pdfFile.name} (No text or error)`}
             </p>
           )}
@@ -411,7 +443,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
         <Textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Enter your topic or text here (or use PDF)..."
+          placeholder={extractedPdfText ? "Add additional instructions or context for the PDF..." : "Enter your topic or text here..."}
           className="flex-grow resize-none min-h-[60px] shadow-sm focus-visible:ring-primary"
           rows={2}
           disabled={isLoading || isProcessingPdf}

@@ -8,8 +8,18 @@ import { GenerateTab } from '@/components/GenerateTab';
 import { FlashcardsTab } from '@/components/FlashcardsTab';
 import { QuizTab } from '@/components/QuizTab';
 import type { FlashcardType, QuizQuestionType, ExportedDataType } from '@/types';
-import { Wand2, Layers, ClipboardCheck, Icon, Upload, Download } from 'lucide-react';
+import { Wand2, Layers, ClipboardCheck, Icon, Upload, Download, AlertTriangle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 type TabValue = 'generate' | 'flashcards' | 'quiz';
 
@@ -21,6 +31,11 @@ interface TabConfig {
   component: React.FC<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 }
 
+interface PendingAction {
+  newFlashcards: FlashcardType[];
+  newQuizQuestions?: QuizQuestionType[];
+}
+
 export default function HomePage() {
   const [flashcards, setFlashcards] = React.useState<FlashcardType[]>([]);
   const [quizQuestions, setQuizQuestions] = React.useState<QuizQuestionType[]>([]);
@@ -28,7 +43,12 @@ export default function HomePage() {
   const { toast } = useToast();
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
-  const handleFlashcardsAndQuizGenerated = (
+  const [isConfirmationDialogOpen, setIsConfirmationDialogOpen] = React.useState(false);
+  const [confirmationDialogContent, setConfirmationDialogContent] = React.useState({ title: '', description: ''});
+  const [onConfirmAction, setOnConfirmAction] = React.useState<(() => void) | null>(null);
+
+
+  const actuallyUpdateFlashcards = (
     newFlashcards: FlashcardType[],
     newQuizQuestions?: QuizQuestionType[]
   ) => {
@@ -38,16 +58,35 @@ export default function HomePage() {
     if (newFlashcards.length > 0) {
       setActiveTab('flashcards');
     } else {
-      setActiveTab('generate');
+      // if generating resulted in empty, or import was empty, stay/go to generate
+      setActiveTab('generate'); 
     }
   };
+  
+  const requestFlashcardUpdate = (
+    newFlashcards: FlashcardType[],
+    newQuizQuestions?: QuizQuestionType[],
+    source: 'generate' | 'import' = 'generate'
+  ) => {
+    if (flashcards.length > 0 || quizQuestions.length > 0) {
+      setConfirmationDialogContent({
+        title: "Overwrite Existing Content?",
+        description: `You have existing flashcards${quizQuestions.length > 0 ? ' and quiz questions' : ''}. ${source === 'generate' ? 'Generating new content' : 'Importing data'} will replace your current set. Are you sure you want to proceed?`
+      });
+      setOnConfirmAction(() => () => actuallyUpdateFlashcards(newFlashcards, newQuizQuestions));
+      setIsConfirmationDialogOpen(true);
+    } else {
+      actuallyUpdateFlashcards(newFlashcards, newQuizQuestions);
+    }
+  };
+
 
   const tabConfigs: TabConfig[] = [
     {
       value: 'generate',
       label: 'Generate',
       icon: Wand2,
-      component: () => <GenerateTab onFlashcardsAndQuizGenerated={handleFlashcardsAndQuizGenerated} />,
+      component: () => <GenerateTab onFlashcardsAndQuizGenerated={requestFlashcardUpdate} />,
     },
     {
       value: 'flashcards',
@@ -61,8 +100,9 @@ export default function HomePage() {
       label: 'Quiz',
       icon: ClipboardCheck,
       disabled: (cards, quizItems) => {
-        if (quizItems.length > 0) return quizItems.length < 1;
-        return cards.length < 2; 
+         // Quiz can be generated from AI questions OR from at least 2 flashcards
+        if (quizItems.length > 0) return false; // AI questions exist
+        return cards.length < 2; // Not enough flashcards for auto-quiz
       },
       component: () => <QuizTab flashcards={flashcards} aiQuizQuestions={quizQuestions} />,
     },
@@ -91,11 +131,8 @@ export default function HomePage() {
         if (!Array.isArray(parsedData.flashcards)) {
           throw new Error('Invalid JSON format: "flashcards" array is missing or not an array.');
         }
-         // quizQuestions can be undefined in the file, default to empty array
         const importedQuizQuestions = Array.isArray(parsedData.quizQuestions) ? parsedData.quizQuestions : [];
 
-
-        // Basic validation for array items (can be expanded)
         const isValidFlashcards = parsedData.flashcards.every(fc => 
           typeof fc.id === 'string' && typeof fc.question === 'string' && typeof fc.answer === 'string'
         );
@@ -107,8 +144,12 @@ export default function HomePage() {
           throw new Error('Invalid data structure within JSON file.');
         }
         
-        handleFlashcardsAndQuizGenerated(parsedData.flashcards, importedQuizQuestions);
-        toast({ title: 'Import Successful', description: 'Flashcards and quiz data loaded.' });
+        requestFlashcardUpdate(parsedData.flashcards, importedQuizQuestions, 'import');
+        // Toast for success will be shown after confirmation if any, or directly
+        if (!(flashcards.length > 0 || quizQuestions.length > 0)) { // if no existing content, toast now
+            toast({ title: 'Import Successful', description: 'Flashcards and quiz data loaded.' });
+        }
+
       } catch (error: any) {
         console.error("Error importing JSON:", error);
         toast({ title: 'Import Error', description: `Failed to parse or validate JSON file: ${error.message}`, variant: 'destructive' });
@@ -128,6 +169,10 @@ export default function HomePage() {
   };
 
   const handleDownload = () => {
+    if (!hasContent) {
+      toast({ title: 'No Content', description: 'There is no data to export.', variant: 'default'});
+      return;
+    }
     const dataToExport: ExportedDataType = { flashcards, quizQuestions };
     const jsonString = JSON.stringify(dataToExport, null, 2);
     const blob = new Blob([jsonString], { type: 'application/json' });
@@ -139,6 +184,7 @@ export default function HomePage() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    toast({ title: 'Export Successful', description: 'Data downloaded as flashzen_export.json'});
   };
 
 
@@ -195,6 +241,37 @@ export default function HomePage() {
           </Button>
         )}
       </div>
+
+      <AlertDialog open={isConfirmationDialogOpen} onOpenChange={setIsConfirmationDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-6 w-6 text-destructive" /> 
+              {confirmationDialogContent.title}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmationDialogContent.description}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setOnConfirmAction(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (onConfirmAction) {
+                  onConfirmAction();
+                  toast({ title: 'Content Updated', description: 'Your flashcards and quiz data have been updated.' });
+                }
+                setOnConfirmAction(null);
+                setIsConfirmationDialogOpen(false);
+              }}
+              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+            >
+              Proceed
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
     </div>
   );
 }

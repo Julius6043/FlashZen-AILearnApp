@@ -8,7 +8,7 @@ import { ScrollArea } from './ui/scroll-area';
 
 interface FlashcardDisplayProps {
   question: string;
-  answer: string;
+  answer: string; // This will be empty if not flipped, controlled by parent
   isFlipped: boolean;
   onFlip: () => void;
 }
@@ -35,7 +35,8 @@ export function FlashcardDisplay({ question, answer, isFlipped, onFlip }: Flashc
         <Card className="flashcard-back bg-card border-2 border-accent/50">
           <CardContent className="h-full">
             <ScrollArea className="h-full">
-              <p className="text-base md:text-lg">{isFlipped ? answer : ''}</p>
+              {/* Answer prop is now pre-conditioned by parent based on isFlipped */}
+              <p className="text-base md:text-lg">{answer}</p>
             </ScrollArea>
           </CardContent>
         </Card>
@@ -43,4 +44,3 @@ export function FlashcardDisplay({ question, answer, isFlipped, onFlip }: Flashc
     </div>
   );
 }
-

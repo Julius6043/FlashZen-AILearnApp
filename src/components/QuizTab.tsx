@@ -7,7 +7,9 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { CheckCircle2, XCircle, Info, Lightbulb, RotateCcw } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { CheckCircle2, XCircle, Info, Lightbulb, RotateCcw, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface QuizTabProps {
@@ -15,11 +17,10 @@ interface QuizTabProps {
   aiQuizQuestions: AIQuizQuestionType[];
 }
 
-// Internal Quiz Question structure, can be derived from FlashcardType or AIQuizQuestionType
 interface QuizDisplayQuestion {
   id: string;
   question: string;
-  options: string[]; // Always shuffled for display consistency once generated
+  options: string[];
   correctAnswer: string;
 }
 
@@ -41,81 +42,134 @@ export function QuizTab({ flashcards, aiQuizQuestions }: QuizTabProps) {
   const [quizCompleted, setQuizCompleted] = React.useState(false);
   const [isLoadingQuiz, setIsLoadingQuiz] = React.useState(true);
 
+  const [numAutoQuizQuestionsInput, setNumAutoQuizQuestionsInput] = React.useState("5");
+  const [quizMode, setQuizMode] = React.useState<'ai_direct' | 'auto_config' | 'auto_active' | 'empty'>('empty');
+
+
+  const generateAutoQuiz = (numQuestions: number) => {
+    if (flashcards.length < 2) return [];
+    const questionsToGenerate = Math.min(numQuestions, flashcards.length);
+    const shuffledFlashcards = shuffleArray(flashcards);
+    
+    return shuffledFlashcards.slice(0, questionsToGenerate).map((card) => {
+      const otherAnswers = flashcards
+        .filter(fc => fc.id !== card.id)
+        .map(fc => fc.answer);
+      
+      let incorrectOptions = shuffleArray(otherAnswers).slice(0, 3);
+      const potentialOptions = [...new Set(otherAnswers)]; 
+      while (incorrectOptions.length < 3 && incorrectOptions.length < potentialOptions.length) {
+        const nextOption = potentialOptions.find(opt => !incorrectOptions.includes(opt) && opt !== card.answer);
+        if (nextOption) incorrectOptions.push(nextOption); else break;
+      }
+      let i = 0;
+      while (incorrectOptions.length < 3 && incorrectOptions.length > 0) {
+          incorrectOptions.push(incorrectOptions[i % incorrectOptions.length] + (incorrectOptions.length < 2 && i > 0 ? ` ${i+1}`: "")); // Add slight variation if duplicating
+          i++;
+      }
+      const uniqueOptions = [...new Set([card.answer, ...incorrectOptions])];
+      return {
+        id: card.id,
+        question: card.question,
+        options: shuffleArray(uniqueOptions.slice(0,4)), // Ensure max 4 options
+        correctAnswer: card.answer,
+      };
+    });
+  };
+
   React.useEffect(() => {
     setIsLoadingQuiz(true);
-    let generatedQuestions: QuizDisplayQuestion[] = [];
-
     if (aiQuizQuestions && aiQuizQuestions.length > 0) {
-      // Use AI-generated quiz questions
-      generatedQuestions = aiQuizQuestions.map(q => ({
-        ...q,
-        options: shuffleArray(q.options), // Shuffle options for display
-      }));
+      setQuizDisplayQuestions(aiQuizQuestions.map(q => ({ ...q, options: shuffleArray(q.options) })));
+      setQuizMode('ai_direct');
     } else if (flashcards.length >= 2) {
-      // Fallback: Derive MCQs from flashcards if no AI questions and enough flashcards
-      generatedQuestions = flashcards.map((card) => {
-        const otherAnswers = flashcards
-          .filter(fc => fc.id !== card.id)
-          .map(fc => fc.answer);
-        
-        let incorrectOptions = shuffleArray(otherAnswers).slice(0, 3);
-        // Ensure 3 incorrect options if possible
-        const potentialOptions = [...new Set(otherAnswers)]; // Unique other answers
-        while (incorrectOptions.length < 3 && incorrectOptions.length < potentialOptions.length) {
-          const nextOption = potentialOptions.find(opt => !incorrectOptions.includes(opt) && opt !== card.answer);
-          if (nextOption) {
-            incorrectOptions.push(nextOption);
-          } else {
-            break; // No more unique incorrect options
-          }
-        }
-         // If still not enough, duplicate from existing incorrect options (less ideal but makes 4 choices)
-        let i = 0;
-        while (incorrectOptions.length < 3 && incorrectOptions.length > 0) {
-            incorrectOptions.push(incorrectOptions[i % incorrectOptions.length]);
-            i++;
-        }
-
-
-        const allOptions = [card.answer, ...incorrectOptions];
-        // Ensure unique and then shuffle
-        const uniqueOptions = [...new Set(allOptions)]; 
-        
-        return {
-          id: card.id,
-          question: card.question,
-          options: shuffleArray(uniqueOptions),
-          correctAnswer: card.answer,
-        };
-      });
+      setQuizMode('auto_config');
+    } else {
+      setQuizMode('empty');
+      setQuizDisplayQuestions([]);
     }
-
-    setQuizDisplayQuestions(shuffleArray(generatedQuestions));
     setCurrentQuestionIndex(0);
     setSelectedAnswer(null);
     setIsAnswered(false);
     setScore(0);
     setQuizCompleted(false);
     setIsLoadingQuiz(false);
-
   }, [flashcards, aiQuizQuestions]);
+
+  const handleStartAutoQuiz = () => {
+    const num = parseInt(numAutoQuizQuestionsInput, 10);
+    if (isNaN(num) || num < 1 || num > flashcards.length) {
+      // Basic validation, can add toast later
+      alert(`Please enter a number between 1 and ${flashcards.length}.`);
+      return;
+    }
+    const autoGenerated = generateAutoQuiz(num);
+    setQuizDisplayQuestions(shuffleArray(autoGenerated));
+    setQuizMode('auto_active');
+    setCurrentQuestionIndex(0);
+    setSelectedAnswer(null);
+    setIsAnswered(false);
+    setScore(0);
+    setQuizCompleted(false);
+  };
 
   if (isLoadingQuiz) {
     return <div className="text-center p-10">Preparing your quiz... <Lightbulb className="inline h-5 w-5 animate-pulse" /></div>;
   }
+  
+  if (quizMode === 'empty') {
+    return (
+     <Alert>
+       <Info className="h-4 w-4" />
+       <AlertTitle>Not Enough Content for Quiz</AlertTitle>
+       <AlertDescription>
+         You need at least 2 flashcards to start a multiple-choice quiz if no AI questions are provided. Please generate more flashcards or ensure AI generates quiz questions.
+       </AlertDescription>
+     </Alert>
+   );
+ }
 
-  if (quizDisplayQuestions.length === 0) {
-     return (
-      <Alert>
-        <Info className="h-4 w-4" />
-        <AlertTitle>Not Enough Content for Quiz</AlertTitle>
-        <AlertDescription>
-          {aiQuizQuestions && aiQuizQuestions.length > 0 ? "AI generated questions are available, but seem to be empty or invalid." : "You need at least 2 flashcards to start a multiple-choice quiz if no AI questions are provided. Please generate more flashcards or ensure AI generates quiz questions."}
-        </AlertDescription>
-      </Alert>
+  if (quizMode === 'auto_config') {
+    return (
+      <Card className="w-full max-w-md mx-auto shadow-lg">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Settings className="h-6 w-6 text-primary"/>Configure Quiz</CardTitle>
+          <CardDescription>Set up your quiz generated from flashcards.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <Label htmlFor="num-auto-quiz">Number of Questions (1-{flashcards.length})</Label>
+            <Input 
+              id="num-auto-quiz"
+              type="number"
+              value={numAutoQuizQuestionsInput}
+              onChange={(e) => setNumAutoQuizQuestionsInput(e.target.value)}
+              min={1}
+              max={flashcards.length}
+              className="mt-1"
+            />
+          </div>
+        </CardContent>
+        <CardFooter>
+          <Button onClick={handleStartAutoQuiz} className="w-full">Start Quiz</Button>
+        </CardFooter>
+      </Card>
     );
   }
-  
+
+
+  if (quizDisplayQuestions.length === 0 && (quizMode === 'ai_direct' || quizMode === 'auto_active')) {
+    return (
+     <Alert variant="destructive">
+       <Info className="h-4 w-4" />
+       <AlertTitle>Quiz Generation Failed</AlertTitle>
+       <AlertDescription>
+         Could not generate quiz questions. AI might have returned empty or invalid data, or there were too few flashcards for auto-generation.
+       </AlertDescription>
+     </Alert>
+   );
+  }
+
   const currentQuestion = quizDisplayQuestions[currentQuestionIndex];
 
   const handleAnswerSelect = (answer: string) => {
@@ -138,7 +192,12 @@ export function QuizTab({ flashcards, aiQuizQuestions }: QuizTabProps) {
   };
   
   const handleRestartQuiz = () => {
-    setQuizDisplayQuestions(prevQuestions => shuffleArray(prevQuestions.map(q => ({...q, options: shuffleArray(q.options.slice()) })))); // Re-shuffle options too
+    if (quizMode === 'ai_direct') {
+      setQuizDisplayQuestions(prevQuestions => shuffleArray(prevQuestions.map(q => ({...q, options: shuffleArray(q.options.slice()) }))));
+    } else { // 'auto_active' or if we want to re-config 'auto_config'
+       setQuizMode('auto_config'); // Go back to config screen for auto-quiz
+       setQuizDisplayQuestions([]); // Clear current questions
+    }
     setCurrentQuestionIndex(0);
     setSelectedAnswer(null);
     setIsAnswered(false);
@@ -169,7 +228,7 @@ export function QuizTab({ flashcards, aiQuizQuestions }: QuizTabProps) {
     );
   }
 
-  if (!currentQuestion) { // Should not happen if quizDisplayQuestions has items
+  if (!currentQuestion) { 
       return <div className="text-center p-10">Error loading current question.</div>;
   }
 
@@ -177,7 +236,7 @@ export function QuizTab({ flashcards, aiQuizQuestions }: QuizTabProps) {
     <Card className="w-full max-w-2xl mx-auto shadow-xl">
       <CardHeader>
         <CardTitle className="text-xl md:text-2xl">Question {currentQuestionIndex + 1} of {quizDisplayQuestions.length}</CardTitle>
-        <CardDescription className="text-base pt-4 min-h-[60px]">{currentQuestion.question}</CardDescription>
+        <CardDescription className="text-base pt-4 min-h-[60px] break-words">{currentQuestion.question}</CardDescription>
         <Progress value={((currentQuestionIndex + 1) / quizDisplayQuestions.length) * 100} className="w-full h-2 mt-2" />
       </CardHeader>
       <CardContent className="space-y-3">
@@ -199,21 +258,21 @@ export function QuizTab({ flashcards, aiQuizQuestions }: QuizTabProps) {
           
           return (
             <Button
-              key={`${currentQuestion.id}-option-${index}`} // More unique key
+              key={`${currentQuestion.id}-option-${index}`}
               variant={buttonVariant}
               className={cn(
                 "w-full justify-start text-left h-auto py-3 px-4 rounded-md transition-all duration-150 ease-in-out",
                 "hover:bg-accent/50 hover:text-accent-foreground",
-                isSelected && !isAnswered && "ring-2 ring-primary",
-                isAnswered && isCorrectOption && "bg-green-500/20 border-green-500 text-green-700 hover:bg-green-500/30",
-                isAnswered && isSelected && !isCorrectOption && "bg-red-500/20 border-red-500 text-red-700 hover:bg-red-500/30"
+                isSelected && !isAnswered && "ring-2 ring-primary ring-offset-1",
+                isAnswered && isCorrectOption && "bg-green-500/20 border-green-500 text-green-700 dark:text-green-300 dark:border-green-600 dark:bg-green-700/30 hover:bg-green-500/30",
+                isAnswered && isSelected && !isCorrectOption && "bg-red-500/20 border-red-500 text-red-700 dark:text-red-300 dark:border-red-600 dark:bg-red-700/30 hover:bg-red-500/30"
               )}
               onClick={() => handleAnswerSelect(option)}
               disabled={isAnswered}
               aria-label={`Option: ${option}${isSelected ? ", selected" : ""}${isAnswered && isCorrectOption ? ", correct" : ""}${isAnswered && isSelected && !isCorrectOption ? ", incorrect" : ""}`}
             >
-              {icon && <span className="mr-2">{icon}</span>}
-              <span className="flex-1 whitespace-normal">{option}</span>
+              {icon && <span className="mr-2 shrink-0">{icon}</span>}
+              <span className="flex-1 whitespace-normal break-words">{option}</span>
             </Button>
           );
         })}
@@ -222,9 +281,12 @@ export function QuizTab({ flashcards, aiQuizQuestions }: QuizTabProps) {
         {isAnswered && (
           <div className="w-full p-3 rounded-md text-center font-semibold">
             {selectedAnswer === currentQuestion.correctAnswer ? (
-              <p className="text-green-600 flex items-center justify-center"><CheckCircle2 className="mr-2"/> Correct!</p>
+              <p className="text-green-600 dark:text-green-400 flex items-center justify-center"><CheckCircle2 className="mr-2"/> Correct!</p>
             ) : (
-              <p className="text-red-600 flex items-center justify-center"><XCircle className="mr-2"/> Incorrect. The correct answer is: <strong className="ml-1">{currentQuestion.correctAnswer}</strong></p>
+              <p className="text-red-600 dark:text-red-400 flex flex-col sm:flex-row items-center justify-center gap-1">
+                <span className="flex items-center"><XCircle className="mr-2"/> Incorrect.</span>
+                <span>Correct answer: <strong className="ml-1">{currentQuestion.correctAnswer}</strong></span>
+              </p>
             )}
           </div>
         )}
@@ -240,4 +302,3 @@ export function QuizTab({ flashcards, aiQuizQuestions }: QuizTabProps) {
     </Card>
   );
 }
-
