@@ -1,3 +1,4 @@
+
 'use server';
 /**
  * @fileOverview Extracts text content from a PDF provided as a Data URI.
@@ -18,52 +19,75 @@ const ExtractTextFromPdfInputSchema = z.object({
 });
 export type ExtractTextFromPdfInput = z.infer<typeof ExtractTextFromPdfInputSchema>;
 
+// Modified Output Schema
 const ExtractTextFromPdfOutputSchema = z.object({
   extractedText: z.string().describe('The text content extracted from the PDF.'),
+  error: z.string().optional().describe('An error message if text extraction failed.'),
 });
 export type ExtractTextFromPdfOutput = z.infer<typeof ExtractTextFromPdfOutputSchema>;
 
+// Export a wrapper function that calls the flow
 export async function extractTextFromPdf(input: ExtractTextFromPdfInput): Promise<ExtractTextFromPdfOutput> {
   return extractTextFromPdfFlow(input);
 }
 
 const extractTextFromPdfFlow = ai.defineFlow(
   {
-    name: 'extractTextFromPdfFlow',
+    name: 'extractTextFromPdfFlow', // Changed name to avoid conflict with wrapper function
     inputSchema: ExtractTextFromPdfInputSchema,
     outputSchema: ExtractTextFromPdfOutputSchema,
   },
-  async (input) => {
+  async (input): Promise<ExtractTextFromPdfOutput> => {
     let pdfParse;
     try {
-      // Using require for the CJS module as an alternative to dynamic import()
-      // This might change how the module is loaded or initialized.
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      pdfParse = require('pdf-parse');
-    } catch (importError: any) {
-      console.error('Error requiring pdf-parse:', importError);
-      // If pdf-parse itself fails to load, it's a critical issue.
-      throw new Error(`Failed to load PDF processing library: ${importError.message}`);
+      // Dynamically import pdf-parse
+      const pdfParseModule = await import('pdf-parse');
+      // Attempt to get the function, accommodating different module export styles
+      pdfParse = pdfParseModule.default || pdfParseModule;
+      if (typeof pdfParse !== 'function') {
+        throw new Error('pdf-parse did not load as a function. Loaded module: ' + JSON.stringify(pdfParseModule));
+      }
+    } catch (e: any) {
+      console.error('Failed to load pdf-parse module:', e);
+      return {
+        extractedText: '',
+        error: `Failed to load PDF parsing library: ${e.message || 'Unknown error'}`,
+      };
     }
 
     try {
       if (!input.pdfDataUri.startsWith('data:application/pdf;base64,')) {
-        throw new Error('Invalid PDF Data URI format. Expected "data:application/pdf;base64,<data>".');
+        return {
+          extractedText: '',
+          error: 'Invalid PDF Data URI format. Expected "data:application/pdf;base64,<data>".',
+        };
       }
       const base64Data = input.pdfDataUri.split(',')[1];
       if (!base64Data) {
-        throw new Error('Invalid PDF Data URI: Missing base64 data.');
+        return {
+          extractedText: '',
+          error: 'Invalid PDF Data URI: Missing base64 data.',
+        };
       }
       const pdfBuffer = Buffer.from(base64Data, 'base64');
-      // pdf-parse exports an async function directly
-      const data = await pdfParse(pdfBuffer); 
-      return { extractedText: data.text };
+      
+      const data = await pdfParse(pdfBuffer);
+
+      if (!data || typeof data.text !== 'string') {
+        console.warn('pdf-parse did not return valid text output from PDF.');
+        return {
+          extractedText: '',
+          error: 'Failed to extract text: PDF content might be an image, empty, or corrupted.',
+        };
+      }
+      
+      return { extractedText: data.text }; // Success
     } catch (error: any) {
       console.error('Error extracting text from PDF:', error);
-      // Return an empty string in case of error to prevent flow failure, client can handle.
-      // Or rethrow if a hard failure is preferred:
-      // throw new Error(`Failed to extract text from PDF: ${error.message}`);
-      return { extractedText: "" };
+      return {
+        extractedText: '',
+        error: `Failed to extract text from PDF: ${error.message || 'Unknown processing error'}`,
+      };
     }
   }
 );

@@ -35,7 +35,7 @@ const textToSpeechFlow = ai.defineFlow(
   async (input) => {
     // Use ai.generate for direct model interaction for specific modalities
     const { media } = await ai.generate({
-      model: 'googleai/gemini-2.0-flash-exp', // Changed model to gemini-2.0-flash-exp
+      model: 'googleai/gemini-2.0-flash-live-001', // Changed model to gemini-2.0-flash-exp
       prompt: `Please read the following text aloud: ${input.textToSpeak}`,
       config: {
         // Ensure responseModalities is ['AUDIO'] as per previous fix for gemini-2.0-flash-exp

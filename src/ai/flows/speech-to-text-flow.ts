@@ -36,7 +36,8 @@ const speechToTextFlow = ai.defineFlow(
   async (input) => {
     // The default model from ai/genkit.ts (gemini-2.5-pro-preview) should handle multimodal input.
     // If not, a specific model like 'googleai/gemini-1.5-flash-latest' could be specified.
-    const response = await ai.generate({ // Changed const { text } to const response
+    const response = await ai.generate({ 
+      model: 'googleai/gemini-2.5-flash-preview-04-17',
       prompt: [
         { media: { url: input.audioDataUri } }, // The data URI includes the mimeType
         { text: 'Transcribe this audio recording accurately and concisely.' },
