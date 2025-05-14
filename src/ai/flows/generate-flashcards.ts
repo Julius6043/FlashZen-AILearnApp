@@ -64,21 +64,21 @@ Existing Flashcards (for context, DO NOT REPEAT OR DUPLICATE content from these)
 --- END EXISTING FLASHCARDS ---
 Generate approximately {{numFlashcards}} NEW and DISTINCT flashcards related to the topic and the existing ones.
 {{else}}
-{{#if pdfText}}
-The user has uploaded a PDF document. Prioritize the content from this PDF for generation.
-PDF Content:
---- START PDF CONTENT ---
-{{{pdfText}}}
---- END PDF CONTENT ---
-{{/if}}
-{{#if duckDuckGoContext}}
-Additional context from a web search has been provided. Use this to supplement your knowledge.
-Web Search Context:
---- START WEB SEARCH CONTEXT ---
-{{{duckDuckGoContext}}}
---- END WEB SEARCH CONTEXT ---
-{{/if}}
-Based on the user's query: "{{{prompt}}}"{{#if pdfText}} and the provided PDF content{{/if}}{{#if duckDuckGoContext}} and the web search context{{/if}}, generate approximately {{numFlashcards}} flashcards.
+  {{#if pdfText}}
+  The user has uploaded a PDF document. Use this document as the primary source material, guided by the "User's primary query/instruction" stated above.
+  PDF Content:
+  --- START PDF CONTENT ---
+  {{{pdfText}}}
+  --- END PDF CONTENT ---
+  {{/if}}
+  {{#if duckDuckGoContext}}
+  Additional context from a web search has been provided. Use this to supplement your knowledge.
+  Web Search Context:
+  --- START WEB SEARCH CONTEXT ---
+  {{{duckDuckGoContext}}}
+  --- END WEB SEARCH CONTEXT ---
+  {{/if}}
+  Based on the user's query: "{{{prompt}}}"{{#if pdfText}} and the provided PDF content{{/if}}{{#if duckDuckGoContext}} and the web search context{{/if}}, generate approximately {{numFlashcards}} flashcards.
 {{/if}}
 
 Each NEW flashcard must have a "question" and an "answer".
@@ -178,3 +178,4 @@ const generateFlashcardsFlow = ai.defineFlow(
 //   return { flashcards: "[]", quizQuestions: "[]" };
 // }
 // return output;
+
