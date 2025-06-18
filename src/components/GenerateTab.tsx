@@ -4,6 +4,7 @@
 import * as React from 'react';
 import { generateFlashcards } from '@/ai/flows/generate-flashcards';
 import { extractTextFromPdf } from '@/ai/flows/extract-text-from-pdf-flow';
+import { extractTextFromPdfFallback } from '@/ai/flows/pdf-text-extraction-direct';
 import { speechToText } from '@/ai/flows/speech-to-text-flow'; // Import the new flow
 import { searchDuckDuckGo } from '@/app/actions/search-actions';
 import { Button } from '@/components/ui/button';
@@ -18,6 +19,7 @@ import { Bot, User, Loader2, Send, FileText, Settings2, AlertTriangle, X, Search
 import { Avatar, AvatarFallback } from './ui/avatar';
 import { cn } from '@/lib/utils';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PDFViewer } from '@/components/PDFViewer';
 
 
 interface GenerateTabProps {
@@ -36,10 +38,11 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
   const [messages, setMessages] = React.useState<Message[]>([]);
   const { toast } = useToast();
   const scrollAreaRef = React.useRef<HTMLDivElement>(null);
-
   const [pdfFile, setPdfFile] = React.useState<File | null>(null); // Represents the file currently selected in the input
   const [extractedPdfText, setExtractedPdfText] = React.useState<string | null>(null); // Text from the successfully processed PDF
   const [pdfFileSourceOfText, setPdfFileSourceOfText] = React.useState<string | null>(null); // Name of the PDF that 'extractedPdfText' came from
+  const [pdfDataUri, setPdfDataUri] = React.useState<string | null>(null); // Data URI for PDF viewer
+  const [showPdfViewer, setShowPdfViewer] = React.useState(false); // Controls PDF viewer visibility
 
   const [numFlashcards, setNumFlashcards] = React.useState<number>(10);
   const [numQuizQuestions, setNumQuizQuestions] = React.useState<number>(5);
@@ -60,20 +63,21 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
       scrollAreaRef.current.scrollTo({ top: scrollAreaRef.current.scrollHeight, behavior: 'smooth' });
     }
   }, [messages]);
-
   const clearAllPdfData = () => {
     setPdfFile(null);
     setExtractedPdfText(null);
     setPdfFileSourceOfText(null);
+    setPdfDataUri(null);
+    setShowPdfViewer(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-     const systemMessageClear: Message = {
-        id: Date.now().toString() + 'system_pdf_cleared',
-        role: 'system',
-        content: <p className="font-semibold">PDF selection and extracted text cleared.</p>,
-        timestamp: new Date(),
-      };
+    const systemMessageClear: Message = {
+      id: Date.now().toString() + 'system_pdf_cleared',
+      role: 'system',
+      content: <p className="font-semibold">PDF selection and extracted text cleared.</p>,
+      timestamp: new Date(),
+    };
     setMessages(prev => [...prev, systemMessageClear]);
   };
 
@@ -82,143 +86,298 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
     const fileFromInput = event.target.files?.[0];
 
     if (!fileFromInput) { // User cancelled file selection
-        setPdfFile(null); // Clear the file from the input state
-        if (fileInputRef.current) fileInputRef.current.value = ''; // Ensure input element is also cleared
+      setPdfFile(null); // Clear the file from the input state
+      if (fileInputRef.current) fileInputRef.current.value = ''; // Ensure input element is also cleared
 
-        if (pdfFileSourceOfText) { // If a previous PDF was successfully loaded
-            const systemMessageKept: Message = {
-                id: Date.now().toString() + 'system_pdf_kept_after_cancel',
-                role: 'system',
-                content: <p className="font-semibold">File selection cancelled. Using previously loaded PDF: {pdfFileSourceOfText}.</p>,
-                timestamp: new Date(),
-            };
-            setMessages(prev => [...prev, systemMessageKept]);
-        }
-        return;
+      if (pdfFileSourceOfText) { // If a previous PDF was successfully loaded
+        const systemMessageKept: Message = {
+          id: Date.now().toString() + 'system_pdf_kept_after_cancel',
+          role: 'system',
+          content: <p className="font-semibold">File selection cancelled. Using previously loaded PDF: {pdfFileSourceOfText}.</p>,
+          timestamp: new Date(),
+        };
+        setMessages(prev => [...prev, systemMessageKept]);
+      }
+      return;
     }
 
     setPdfFile(fileFromInput); // Set the file in input state immediately
 
     if (fileFromInput.type !== 'application/pdf') {
-        toast({ title: 'Invalid File Type', description: 'Please upload a PDF file.', variant: 'destructive' });
-        // Old pdfFileSourceOfText and extractedPdfText remain if they were valid. The invalid file is shown in `pdfFile`.
-        return;
+      toast({ title: 'Invalid File Type', description: 'Please upload a PDF file.', variant: 'destructive' });
+      // Old pdfFileSourceOfText and extractedPdfText remain if they were valid. The invalid file is shown in `pdfFile`.
+      return;
     }
     if (fileFromInput.size > 5 * 1024 * 1024) { // 5MB limit
-        toast({ title: 'File Too Large', description: 'Please upload a PDF smaller than 5MB.', variant: 'destructive' });
-        // Old pdfFileSourceOfText and extractedPdfText remain. The oversized file is shown in `pdfFile`.
-        return;
+      toast({ title: 'File Too Large', description: 'Please upload a PDF smaller than 5MB.', variant: 'destructive' });
+      // Old pdfFileSourceOfText and extractedPdfText remain. The oversized file is shown in `pdfFile`.
+      return;
     }
 
     setIsProcessingPdf(true);
     const systemMessageProcessing: Message = {
-        id: Date.now().toString() + 'system_pdf_processing',
-        role: 'system',
-        content: `Processing PDF: ${fileFromInput.name}...`,
-        timestamp: new Date(),
+      id: Date.now().toString() + 'system_pdf_processing',
+      role: 'system',
+      content: `Processing PDF: ${fileFromInput.name}...`,
+      timestamp: new Date(),
     };
     setMessages(prev => [...prev, systemMessageProcessing]);
 
     try {
-        const reader = new FileReader();
-        reader.readAsDataURL(fileFromInput);
-        reader.onload = async () => {
-            const pdfDataUri = reader.result as string;
-            try { // Outer try: covers the call to extractTextFromPdf and its immediate handling
-                const result = await extractTextFromPdf({ pdfDataUri });
+      const reader = new FileReader();
+      reader.readAsDataURL(fileFromInput); reader.onload = async () => {
+        const pdfDataUri = reader.result as string;
 
-                if (result.error) {
-                    console.error('Error from extractTextFromPdf flow:', result.error);
-                    if (pdfFileSourceOfText && pdfFileSourceOfText !== fileFromInput.name) {
-                        toast({ title: 'PDF Extraction Error', description: `Could not extract text from ${fileFromInput.name}: ${result.error}. Using previous PDF: ${pdfFileSourceOfText}.`, variant: 'destructive' });
-                        const systemMessageErrorKept: Message = {
-                            id: Date.now().toString() + 'system_pdf_flow_error_kept',
-                            role: 'system',
-                            content: <p className="font-semibold text-destructive">Error extracting from {fileFromInput.name}. Using previously loaded: {pdfFileSourceOfText}.</p>,
-                            timestamp: new Date(),
-                        };
-                        setMessages(prev => [...prev, systemMessageErrorKept]);
-                    } else {
-                        setExtractedPdfText(null);
-                        setPdfFileSourceOfText(null);
-                        toast({ title: 'PDF Extraction Error', description: `Could not extract text from ${fileFromInput.name}: ${result.error}`, variant: 'destructive' });
-                        const systemMessageError: Message = {
-                            id: Date.now().toString() + 'system_pdf_flow_error',
-                            role: 'system',
-                            content: <p className="font-semibold text-destructive">Error extracting text from {fileFromInput.name}: ${result.error}</p>,
-                            timestamp: new Date(),
-                        };
-                        setMessages(prev => [...prev, systemMessageError]);
-                    }
-                } else if (result.extractedText && result.extractedText.trim() !== "") {
-                    setExtractedPdfText(result.extractedText);
-                    setPdfFileSourceOfText(fileFromInput.name);
-                    const systemMessageSuccess: Message = {
-                        id: Date.now().toString() + 'system_pdf_success',
-                        role: 'system',
-                        content: (
-                            <div>
-                                <p className="font-semibold text-green-600 dark:text-green-400">Successfully extracted text from {fileFromInput.name}.</p>
-                                <p className="text-xs text-muted-foreground">Length: {result.extractedText.length} characters.</p>
-                            </div>
-                        ),
-                        timestamp: new Date(),
-                    };
-                    setMessages(prev => [...prev, systemMessageSuccess]);
-                    toast({ title: 'PDF Processed', description: `Text extracted from ${fileFromInput.name}.` });
-                } else { // Successfully processed, but no text content (empty string or only whitespace)
-                    setExtractedPdfText(""); // Set to empty string, not null
-                    setPdfFileSourceOfText(fileFromInput.name); // Acknowledge this file was processed
-                    toast({ title: 'PDF Processed', description: `No text content found in ${fileFromInput.name}.`, variant: 'default' });
-                    const systemMessageEmptyText: Message = {
-                        id: Date.now().toString() + 'system_pdf_empty_text',
-                        role: 'system',
-                        content: <p className="font-semibold text-orange-500 dark:text-orange-400">Successfully processed {fileFromInput.name}, but no text content was found.</p>,
-                        timestamp: new Date(),
-                    };
-                    setMessages(prev => [...prev, systemMessageEmptyText]);
-                }
-            } catch (extractionProcessError: any) { // Catch for if extractTextFromPdf *itself* throws or network fails
-                console.error('Error calling/processing PDF extraction flow:', extractionProcessError);
+        // Store the PDF data URI for the viewer
+        setPdfDataUri(pdfDataUri);
+        setShowPdfViewer(true);
+
+        try { // Outer try: covers the call to extractTextFromPdf and its immediate handling
+          const result = await extractTextFromPdf({ pdfDataUri }); if (!result.success || result.error) {
+            console.error('Error from extractTextFromPdf flow:', result.error);
+            // Try fallback method
+            console.log('Attempting fallback PDF extraction method...');
+            try {
+              const fallbackResult = await extractTextFromPdfFallback(pdfDataUri);
+
+              if (fallbackResult.success && fallbackResult.extractedText && fallbackResult.extractedText.trim() !== "") {
+                setExtractedPdfText(fallbackResult.extractedText);
+                setPdfFileSourceOfText(fileFromInput.name);
+
+                // Success message with fallback indicator
+                const metadata = fallbackResult.metadata;
+                const metadataInfo = [];
+                if (metadata?.charCount) metadataInfo.push(`${metadata.charCount.toLocaleString()} characters`);
+                if (metadata?.wordCount) metadataInfo.push(`${metadata.wordCount.toLocaleString()} words`);
+                if (metadata?.pageCount) metadataInfo.push(`${metadata.pageCount} pages`);
+
+                const systemMessageFallbackSuccess: Message = {
+                  id: Date.now().toString() + 'system_pdf_fallback_success',
+                  role: 'system',
+                  content: (
+                    <div>
+                      <p className="font-semibold text-blue-600 dark:text-blue-400">Successfully extracted text from {fileFromInput.name} (using alternative method).</p>
+                      {metadataInfo.length > 0 && (
+                        <p className="text-xs text-muted-foreground">{metadataInfo.join(', ')}</p>
+                      )}
+                      {metadata?.title && (
+                        <p className="text-xs text-muted-foreground">Title: {metadata.title}</p>
+                      )}
+                    </div>
+                  ),
+                  timestamp: new Date(),
+                };
+                setMessages(prev => [...prev, systemMessageFallbackSuccess]);
+                toast({
+                  title: 'PDF Processed (Alternative Method)',
+                  description: `Text extracted from ${fileFromInput.name}. ${metadataInfo.join(', ')}`
+                });
+              } else {
+                // Fallback also failed or returned empty content
                 if (pdfFileSourceOfText && pdfFileSourceOfText !== fileFromInput.name) {
-                    toast({ title: 'PDF Processing Error', description: `Could not process ${fileFromInput.name}: ${extractionProcessError.message}. Using previous PDF: ${pdfFileSourceOfText}.`, variant: 'destructive' });
-                    const systemMessageErrorKept: Message = {
-                        id: Date.now().toString() + 'system_pdf_proc_error_kept',
-                        role: 'system',
-                        content: <p className="font-semibold text-destructive">Error processing {fileFromInput.name}. Using previously loaded: {pdfFileSourceOfText}.</p>,
-                        timestamp: new Date(),
-                    };
-                    setMessages(prev => [...prev, systemMessageErrorKept]);
+                  toast({ title: 'PDF Extraction Error', description: `Could not extract text from ${fileFromInput.name}: ${result.error}. Using previous PDF: ${pdfFileSourceOfText}.`, variant: 'destructive' });
+                  const systemMessageErrorKept: Message = {
+                    id: Date.now().toString() + 'system_pdf_flow_error_kept',
+                    role: 'system',
+                    content: <p className="font-semibold text-destructive">Error extracting from {fileFromInput.name}. Using previously loaded: {pdfFileSourceOfText}.</p>,
+                    timestamp: new Date(),
+                  };
+                  setMessages(prev => [...prev, systemMessageErrorKept]);
                 } else {
-                    setExtractedPdfText(null);
-                    setPdfFileSourceOfText(null);
-                    toast({ title: 'PDF Processing Error', description: `Could not process ${fileFromInput.name}: ${extractionProcessError.message}`, variant: 'destructive' });
-                     const systemMessageError: Message = {
-                        id: Date.now().toString() + 'system_pdf_proc_error',
-                        role: 'system',
-                        content: <p className="font-semibold text-destructive">Error processing {fileFromInput.name}: ${extractionProcessError.message}</p>,
-                        timestamp: new Date(),
-                    };
-                    setMessages(prev => [...prev, systemMessageError]);
+                  setExtractedPdfText(null);
+                  setPdfFileSourceOfText(null);
+                  const errorMsg = fallbackResult.error || result.error || 'Unknown error';
+                  toast({ title: 'PDF Extraction Error', description: `Could not extract text from ${fileFromInput.name}: ${errorMsg}`, variant: 'destructive' });
+                  const systemMessageError: Message = {
+                    id: Date.now().toString() + 'system_pdf_flow_error',
+                    role: 'system',
+                    content: <p className="font-semibold text-destructive">Error extracting text from {fileFromInput.name}: {errorMsg}</p>,
+                    timestamp: new Date(),
+                  };
+                  setMessages(prev => [...prev, systemMessageError]);
                 }
-            } finally {
-                setIsProcessingPdf(false);
+              }
+            } catch (fallbackError: any) {
+              console.error('Fallback PDF extraction also failed:', fallbackError);
+              // Handle fallback failure same as original failure
+              if (pdfFileSourceOfText && pdfFileSourceOfText !== fileFromInput.name) {
+                toast({ title: 'PDF Extraction Error', description: `Could not extract text from ${fileFromInput.name}: ${result.error}. Using previous PDF: ${pdfFileSourceOfText}.`, variant: 'destructive' });
+                const systemMessageErrorKept: Message = {
+                  id: Date.now().toString() + 'system_pdf_flow_error_kept',
+                  role: 'system',
+                  content: <p className="font-semibold text-destructive">Error extracting from {fileFromInput.name}. Using previously loaded: {pdfFileSourceOfText}.</p>,
+                  timestamp: new Date(),
+                };
+                setMessages(prev => [...prev, systemMessageErrorKept]);
+              } else {
+                setExtractedPdfText(null);
+                setPdfFileSourceOfText(null);
+                toast({ title: 'PDF Extraction Error', description: `Could not extract text from ${fileFromInput.name}: ${result.error}`, variant: 'destructive' });
+                const systemMessageError: Message = {
+                  id: Date.now().toString() + 'system_pdf_flow_error',
+                  role: 'system',
+                  content: <p className="font-semibold text-destructive">Error extracting text from {fileFromInput.name}: {result.error}</p>,
+                  timestamp: new Date(),
+                };
+                setMessages(prev => [...prev, systemMessageError]);
+              }
             }
-        };
-        reader.onerror = () => {
-            console.error('Failed to read PDF file.');
-            toast({ title: 'File Read Error', description: `Could not read the selected file: ${fileFromInput.name}.`, variant: 'destructive' });
-            setIsProcessingPdf(false);
-            // pdfFile state still holds fileFromInput. Old pdfFileSourceOfText and extractedPdfText remain if different.
-            // If this was the only PDF or same as active, the active context might be stale if not explicitly cleared.
-            // For simplicity, if reader fails, we don't alter existing good extractedPdfText from another file.
-        };
-    } catch (error: any) { 
-        console.error('Error setting up FileReader for PDF:', error);
-        toast({ title: 'PDF Setup Error', description: 'An unexpected error occurred while preparing to read the PDF.', variant: 'destructive' });
+          } else if (result.extractedText && result.extractedText.trim() !== "") {
+            setExtractedPdfText(result.extractedText);
+            setPdfFileSourceOfText(fileFromInput.name);
+
+            // Enhanced success message with metadata
+            const metadata = result.metadata;
+            const metadataInfo = [];
+            if (metadata?.charCount) metadataInfo.push(`${metadata.charCount.toLocaleString()} characters`);
+            if (metadata?.wordCount) metadataInfo.push(`${metadata.wordCount.toLocaleString()} words`);
+            if (metadata?.pageCount) metadataInfo.push(`${metadata.pageCount} pages`);
+
+            const systemMessageSuccess: Message = {
+              id: Date.now().toString() + 'system_pdf_success',
+              role: 'system',
+              content: (
+                <div>
+                  <p className="font-semibold text-green-600 dark:text-green-400">Successfully extracted text from {fileFromInput.name}.</p>
+                  {metadataInfo.length > 0 && (
+                    <p className="text-xs text-muted-foreground">{metadataInfo.join(', ')}</p>
+                  )}
+                  {metadata?.title && (
+                    <p className="text-xs text-muted-foreground">Title: {metadata.title}</p>
+                  )}
+                </div>
+              ),
+              timestamp: new Date(),
+            };
+            setMessages(prev => [...prev, systemMessageSuccess]);
+            toast({
+              title: 'PDF Processed',
+              description: `Text extracted from ${fileFromInput.name}. ${metadataInfo.join(', ')}`
+            });
+          } else { // Successfully processed, but no text content (empty string or only whitespace)
+            setExtractedPdfText(""); // Set to empty string, not null
+            setPdfFileSourceOfText(fileFromInput.name); // Acknowledge this file was processed
+
+            const pageInfo = result.metadata?.pageCount ? ` (${result.metadata.pageCount} pages)` : '';
+            toast({ title: 'PDF Processed', description: `No text content found in ${fileFromInput.name}${pageInfo}.`, variant: 'default' });
+            const systemMessageEmptyText: Message = {
+              id: Date.now().toString() + 'system_pdf_empty_text',
+              role: 'system',
+              content: <p className="font-semibold text-orange-500 dark:text-orange-400">Successfully processed {fileFromInput.name}${pageInfo}, but no text content was found.</p>,
+              timestamp: new Date(),
+            };
+            setMessages(prev => [...prev, systemMessageEmptyText]);
+          }
+        } catch (extractionProcessError: any) { // Catch for if extractTextFromPdf *itself* throws or network fails
+          console.error('Error calling/processing PDF extraction flow:', extractionProcessError);
+          // Try fallback method for process errors too
+          console.log('Primary PDF extraction failed with process error, attempting fallback...');
+          try {
+            const fallbackResult = await extractTextFromPdfFallback(pdfDataUri);
+
+            if (fallbackResult.success && fallbackResult.extractedText && fallbackResult.extractedText.trim() !== "") {
+              setExtractedPdfText(fallbackResult.extractedText);
+              setPdfFileSourceOfText(fileFromInput.name);
+
+              // Success message with fallback indicator
+              const metadata = fallbackResult.metadata;
+              const metadataInfo = [];
+              if (metadata?.charCount) metadataInfo.push(`${metadata.charCount.toLocaleString()} characters`);
+              if (metadata?.wordCount) metadataInfo.push(`${metadata.wordCount.toLocaleString()} words`);
+              if (metadata?.pageCount) metadataInfo.push(`${metadata.pageCount} pages`);
+
+              const systemMessageFallbackSuccess: Message = {
+                id: Date.now().toString() + 'system_pdf_fallback_process_success',
+                role: 'system',
+                content: (
+                  <div>
+                    <p className="font-semibold text-blue-600 dark:text-blue-400">Successfully extracted text from {fileFromInput.name} (using alternative method).</p>
+                    {metadataInfo.length > 0 && (
+                      <p className="text-xs text-muted-foreground">{metadataInfo.join(', ')}</p>
+                    )}
+                    {metadata?.title && (
+                      <p className="text-xs text-muted-foreground">Title: {metadata.title}</p>
+                    )}
+                  </div>
+                ),
+                timestamp: new Date(),
+              };
+              setMessages(prev => [...prev, systemMessageFallbackSuccess]);
+              toast({
+                title: 'PDF Processed (Alternative Method)',
+                description: `Text extracted from ${fileFromInput.name}. ${metadataInfo.join(', ')}`
+              });
+            } else {
+              // Fallback also failed
+              if (pdfFileSourceOfText && pdfFileSourceOfText !== fileFromInput.name) {
+                toast({ title: 'PDF Processing Error', description: `Could not process ${fileFromInput.name}: ${extractionProcessError.message}. Using previous PDF: ${pdfFileSourceOfText}.`, variant: 'destructive' });
+                const systemMessageErrorKept: Message = {
+                  id: Date.now().toString() + 'system_pdf_proc_error_kept',
+                  role: 'system',
+                  content: <p className="font-semibold text-destructive">Error processing {fileFromInput.name}. Using previously loaded: {pdfFileSourceOfText}.</p>,
+                  timestamp: new Date(),
+                };
+                setMessages(prev => [...prev, systemMessageErrorKept]);
+              } else {
+                setExtractedPdfText(null);
+                setPdfFileSourceOfText(null);
+                const errorMsg = fallbackResult.error || extractionProcessError.message;
+                toast({ title: 'PDF Processing Error', description: `Could not process ${fileFromInput.name}: ${errorMsg}`, variant: 'destructive' });
+                const systemMessageError: Message = {
+                  id: Date.now().toString() + 'system_pdf_proc_error',
+                  role: 'system',
+                  content: <p className="font-semibold text-destructive">Error processing {fileFromInput.name}: ${errorMsg}</p>,
+                  timestamp: new Date(),
+                };
+                setMessages(prev => [...prev, systemMessageError]);
+              }
+            }
+          } catch (fallbackProcessError: any) {
+            console.error('Fallback PDF extraction also failed for process error:', fallbackProcessError);
+            // Handle as original process error
+            if (pdfFileSourceOfText && pdfFileSourceOfText !== fileFromInput.name) {
+              toast({ title: 'PDF Processing Error', description: `Could not process ${fileFromInput.name}: ${extractionProcessError.message}. Using previous PDF: ${pdfFileSourceOfText}.`, variant: 'destructive' });
+              const systemMessageErrorKept: Message = {
+                id: Date.now().toString() + 'system_pdf_proc_error_kept',
+                role: 'system',
+                content: <p className="font-semibold text-destructive">Error processing {fileFromInput.name}. Using previously loaded: {pdfFileSourceOfText}.</p>,
+                timestamp: new Date(),
+              };
+              setMessages(prev => [...prev, systemMessageErrorKept]);
+            } else {
+              setExtractedPdfText(null);
+              setPdfFileSourceOfText(null);
+              toast({ title: 'PDF Processing Error', description: `Could not process ${fileFromInput.name}: ${extractionProcessError.message}`, variant: 'destructive' });
+              const systemMessageError: Message = {
+                id: Date.now().toString() + 'system_pdf_proc_error',
+                role: 'system',
+                content: <p className="font-semibold text-destructive">Error processing {fileFromInput.name}: ${extractionProcessError.message}</p>,
+                timestamp: new Date(),
+              };
+              setMessages(prev => [...prev, systemMessageError]);
+            }
+          }
+        } finally {
+          setIsProcessingPdf(false);
+        }
+      }; reader.onerror = () => {
+        console.error('Failed to read PDF file.');
+        toast({ title: 'File Read Error', description: `Could not read the selected file: ${fileFromInput.name}.`, variant: 'destructive' });
         setIsProcessingPdf(false);
-        setPdfFile(null); 
-        if (fileInputRef.current) fileInputRef.current.value = ''; 
+        setPdfDataUri(null);
+        setShowPdfViewer(false);
+        // pdfFile state still holds fileFromInput. Old pdfFileSourceOfText and extractedPdfText remain if different.
+        // If this was the only PDF or same as active, the active context might be stale if not explicitly cleared.
+        // For simplicity, if reader fails, we don't alter existing good extractedPdfText from another file.
+      };
+    } catch (error: any) {
+      console.error('Error setting up FileReader for PDF:', error);
+      toast({ title: 'PDF Setup Error', description: 'An unexpected error occurred while preparing to read the PDF.', variant: 'destructive' });
+      setIsProcessingPdf(false);
+      setPdfFile(null);
+      setPdfDataUri(null);
+      setShowPdfViewer(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -236,8 +395,8 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
     if (currentPrompt) {
       userMessageContentElements.push(<span key="prompt-text">{currentPrompt}</span>);
     }
-    if (pdfFileSourceOfText) { 
-         userMessageContentElements.push(<span key="pdf-indicator" className="block text-xs opacity-80 mt-1">Using content from: {pdfFileSourceOfText} {extractedPdfText === "" ? "(no text found)" : ""}</span>);
+    if (pdfFileSourceOfText) {
+      userMessageContentElements.push(<span key="pdf-indicator" className="block text-xs opacity-80 mt-1">Using content from: {pdfFileSourceOfText} {extractedPdfText === "" ? "(no text found)" : ""}</span>);
     }
 
 
@@ -255,7 +414,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
     };
 
     setMessages(prev => [...prev, userMessage]);
-    if (currentPrompt) setPrompt(''); 
+    if (currentPrompt) setPrompt('');
 
     let duckDuckGoContextData: string | undefined = undefined;
     const effectivePromptForSearch = currentPrompt || pdfFileSourceOfText || "content from PDF";
@@ -311,10 +470,10 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
         }
       } catch (searchError: any) {
         const searchErrorSystemMessage: Message = {
-            id: Date.now().toString() + 'system_search_exception',
-            role: 'system',
-            content: <p className="font-semibold text-destructive">Web search failed: {searchError.message}</p>,
-            timestamp: new Date(),
+          id: Date.now().toString() + 'system_search_exception',
+          role: 'system',
+          content: <p className="font-semibold text-destructive">Web search failed: {searchError.message}</p>,
+          timestamp: new Date(),
         };
         setMessages(prev => [...prev, searchErrorSystemMessage]);
         toast({ title: 'Web Search Failed', description: searchError.message, variant: 'destructive' });
@@ -326,7 +485,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
     setIsGeneratingContent(true);
     try {
       const generationInputPrompt = currentPrompt || (pdfFileSourceOfText ? `Using content from PDF: ${pdfFileSourceOfText}. Focus on its key topics.` : "Generate flashcards on a general topic.");
-      
+
       const result = await generateFlashcards({
         prompt: generationInputPrompt,
         // Pass pdfText only if it's not null and not an empty string.
@@ -362,7 +521,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
           throw new Error('Generated flashcard data is not an array.');
         }
         if (parsedFlashcards.length === 0 && result.flashcards !== "[]") {
-           throw new Error('No valid flashcards generated from non-empty AI response.');
+          throw new Error('No valid flashcards generated from non-empty AI response.');
         }
       } catch (parseError: any) {
         console.error('Error parsing flashcards JSON:', parseError);
@@ -388,7 +547,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
           } else {
             throw new Error('Generated quiz data is not an array.');
           }
-           if (parsedQuizQuestions && parsedQuizQuestions.length === 0 && result.quizQuestions !== "[]") { 
+          if (parsedQuizQuestions && parsedQuizQuestions.length === 0 && result.quizQuestions !== "[]") {
             throw new Error('No valid quiz questions generated from non-empty AI response.');
           }
         } catch (parseError: any) {
@@ -421,7 +580,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
       }
 
       if (parsedQuizQuestions && parsedQuizQuestions.length > 0) {
-         aiMessageContentParts.push(
+        aiMessageContentParts.push(
           <div key="quiz-preview" className="mt-2">
             <p className="font-semibold mb-1">Quiz questions generated ({parsedQuizQuestions.length}):</p>
             <ScrollArea className="max-h-40 rounded-md border bg-muted p-2 text-xs">
@@ -430,7 +589,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
           </div>
         );
       }
-       if (quizParseError) {
+      if (quizParseError) {
         aiMessageContentParts.push(
           <div key="quiz-error" className="mt-2">
             <p className="font-semibold text-destructive mb-1">Error parsing quiz questions!</p>
@@ -443,7 +602,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
       }
 
       if (aiMessageContentParts.length === 0 && !flashcardParseError && !quizParseError) {
-         aiMessageContentParts.push(<p key="no-content">AI returned no valid content or empty arrays.</p>);
+        aiMessageContentParts.push(<p key="no-content">AI returned no valid content or empty arrays.</p>);
       }
 
 
@@ -458,9 +617,9 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
       onFlashcardsAndQuizGenerated(parsedFlashcards, parsedQuizQuestions, 'generate');
 
       if (parsedFlashcards.length === 0 && (flashcardParseError || quizParseError)) {
-         toast({ title: 'Parsing Error', description: 'Could not fully parse the AI response. Check details in chat.', variant: 'destructive' });
+        toast({ title: 'Parsing Error', description: 'Could not fully parse the AI response. Check details in chat.', variant: 'destructive' });
       } else if (parsedFlashcards.length === 0 && !flashcardParseError && !quizParseError && (numFlashcards > 0 || numQuizQuestions > 0)) {
-         toast({ title: 'No Content', description: 'AI did not generate valid flashcards or quiz questions.', variant: 'default' });
+        toast({ title: 'No Content', description: 'AI did not generate valid flashcards or quiz questions.', variant: 'default' });
       }
 
     } catch (error: any) {
@@ -493,8 +652,8 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
       // Request permission and start recording
       try {
         if (hasMicPermission === null) {
-           const systemMessagePerm: Message = { id: Date.now().toString() + 'system_mic_perm', role: 'system', content: 'Requesting microphone permission...', timestamp: new Date() };
-           setMessages(prev => [...prev, systemMessagePerm]);
+          const systemMessagePerm: Message = { id: Date.now().toString() + 'system_mic_perm', role: 'system', content: 'Requesting microphone permission...', timestamp: new Date() };
+          setMessages(prev => [...prev, systemMessagePerm]);
         }
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         setHasMicPermission(true);
@@ -510,8 +669,8 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
         };
 
         mediaRecorderRef.current.onstop = async () => {
-          stream.getTracks().forEach(track => track.stop()); 
-          const audioBlob = new Blob(audioChunksRef.current, { type: audioChunksRef.current[0]?.type || 'audio/webm' }); 
+          stream.getTracks().forEach(track => track.stop());
+          const audioBlob = new Blob(audioChunksRef.current, { type: audioChunksRef.current[0]?.type || 'audio/webm' });
           audioChunksRef.current = [];
 
           if (audioBlob.size === 0) {
@@ -538,7 +697,7 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
                 setMessages(prev => [...prev, systemMessageSuccess]);
               } else {
                 toast({ title: 'Transcription Empty', description: 'AI did not return any text.', variant: 'default' });
-                 const systemMessageEmptyTranscription: Message = { id: Date.now().toString() + 'system_mic_empty_transcription', role: 'system', content: <p className="font-semibold text-orange-500 dark:text-orange-400">Transcription returned no text.</p>, timestamp: new Date() };
+                const systemMessageEmptyTranscription: Message = { id: Date.now().toString() + 'system_mic_empty_transcription', role: 'system', content: <p className="font-semibold text-orange-500 dark:text-orange-400">Transcription returned no text.</p>, timestamp: new Date() };
                 setMessages(prev => [...prev, systemMessageEmptyTranscription]);
               }
             } catch (transcriptionError: any) {
@@ -550,12 +709,12 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
               setIsTranscribing(false);
             }
           };
-           reader.onerror = () => {
-             toast({ title: 'File Read Error', description: 'Could not process recorded audio.', variant: 'destructive'});
-             setIsTranscribing(false);
-              const systemMessageReadError: Message = { id: Date.now().toString() + 'system_mic_read_error', role: 'system', content: <p className="font-semibold text-destructive">Error processing recorded audio data.</p>, timestamp: new Date() };
-              setMessages(prev => [...prev, systemMessageReadError]);
-           }
+          reader.onerror = () => {
+            toast({ title: 'File Read Error', description: 'Could not process recorded audio.', variant: 'destructive' });
+            setIsTranscribing(false);
+            const systemMessageReadError: Message = { id: Date.now().toString() + 'system_mic_read_error', role: 'system', content: <p className="font-semibold text-destructive">Error processing recorded audio data.</p>, timestamp: new Date() };
+            setMessages(prev => [...prev, systemMessageReadError]);
+          }
         };
         mediaRecorderRef.current.start();
         setIsRecording(true);
@@ -568,26 +727,39 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
           description: 'Please enable microphone permissions in your browser settings.',
           variant: 'destructive',
         });
-         const systemMessageDenied: Message = { id: Date.now().toString() + 'system_mic_denied', role: 'system', content: <p className="font-semibold text-destructive">Microphone permission denied or microphone not found.</p>, timestamp: new Date() };
+        const systemMessageDenied: Message = { id: Date.now().toString() + 'system_mic_denied', role: 'system', content: <p className="font-semibold text-destructive">Microphone permission denied or microphone not found.</p>, timestamp: new Date() };
         setMessages(prev => [...prev, systemMessageDenied]);
       }
     }
   };
 
   const anyLoading = isProcessingPdf || isSearchingWeb || isGeneratingContent || isTranscribing;
-  const micButtonDisabled = anyLoading || (isRecording && isTranscribing); 
+  const micButtonDisabled = anyLoading || (isRecording && isTranscribing);
 
   const showPdfClearButton = pdfFile || pdfFileSourceOfText;
-  
   let pdfStatusMessageElement = null;
   if (isProcessingPdf && pdfFile) {
-      pdfStatusMessageElement = <p className="text-xs text-muted-foreground mt-1 truncate" title={pdfFile.name}>Processing: {pdfFile.name}...</p>;
-  } else if (pdfFileSourceOfText) { 
-      const statusText = extractedPdfText === "" ? `${pdfFileSourceOfText} (no text found)` : pdfFileSourceOfText;
-      const statusColor = extractedPdfText === "" ? "text-orange-500 dark:text-orange-400" : "text-green-600 dark:text-green-400";
-      pdfStatusMessageElement = <p className={cn("text-xs mt-1 truncate", statusColor)} title={pdfFileSourceOfText}>Using: {statusText}</p>;
-  } else if (pdfFile) { 
-      pdfStatusMessageElement = <p className="text-xs text-orange-500 dark:text-orange-400 mt-1 truncate" title={pdfFile.name}>Selected: {pdfFile.name} (No active PDF text. Try processing or select a valid PDF.)</p>;
+    pdfStatusMessageElement = <p className="text-xs text-muted-foreground mt-1 truncate" title={pdfFile.name}>Processing: {pdfFile.name}...</p>;
+  } else if (pdfFileSourceOfText) {
+    const statusText = extractedPdfText === "" ? `${pdfFileSourceOfText} (no text found)` : pdfFileSourceOfText;
+    const statusColor = extractedPdfText === "" ? "text-orange-500 dark:text-orange-400" : "text-green-600 dark:text-green-400";
+    pdfStatusMessageElement = (
+      <div className="flex items-center justify-between mt-1">
+        <p className={cn("text-xs truncate", statusColor)} title={pdfFileSourceOfText}>Using: {statusText}</p>
+        {pdfDataUri && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowPdfViewer(!showPdfViewer)}
+            className="h-5 px-1 text-xs ml-1 shrink-0"
+          >
+            {showPdfViewer ? 'Hide' : 'Preview'}
+          </Button>
+        )}
+      </div>
+    );
+  } else if (pdfFile) {
+    pdfStatusMessageElement = <p className="text-xs text-orange-500 dark:text-orange-400 mt-1 truncate" title={pdfFile.name}>Selected: {pdfFile.name} (No active PDF text. Try processing or select a valid PDF.)</p>;
   }
 
 
@@ -609,14 +781,14 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
                 "flex items-start gap-3 p-3 rounded-lg shadow-sm max-w-[90%]",
                 msg.role === 'user' ? 'ml-auto bg-primary text-primary-foreground'
                   : msg.role === 'system' ? 'mx-auto bg-amber-100 text-amber-800 dark:bg-amber-800/30 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-sm'
-                  : 'bg-muted'
+                    : 'bg-muted'
               )}
             >
               <Avatar className={cn("w-8 h-8", msg.role === 'system' && "hidden sm:flex")}>
                 <AvatarFallback>
-                  {msg.role === 'user' ? <User size={18}/> :
-                   msg.role === 'system' ? <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400" /> :
-                   <Bot size={18} />}
+                  {msg.role === 'user' ? <User size={18} /> :
+                    msg.role === 'system' ? <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400" /> :
+                      <Bot size={18} />}
                 </AvatarFallback>
               </Avatar>
               <div className="flex-1 text-sm break-words">
@@ -633,23 +805,23 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
             </div>
           ))}
           {anyLoading && (
-             <div className="flex items-start gap-3 p-3 rounded-lg shadow-sm max-w-[90%] bg-muted">
-                <Avatar className="w-8 h-8">
-                  <AvatarFallback><Bot size={18} /></AvatarFallback>
-                </Avatar>
-                <div className="flex-1 text-sm">
-                  <p className="font-semibold mb-1">FlashZen AI</p>
-                  <div className="flex items-center space-x-2">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    <span>
-                      {isProcessingPdf ? 'Processing PDF...' :
-                       isSearchingWeb ? 'Searching web...' :
-                       isTranscribing ? 'Transcribing audio...' :
-                       isGeneratingContent ? 'Generating content...' : 'Loading...'}
-                    </span>
-                  </div>
+            <div className="flex items-start gap-3 p-3 rounded-lg shadow-sm max-w-[90%] bg-muted">
+              <Avatar className="w-8 h-8">
+                <AvatarFallback><Bot size={18} /></AvatarFallback>
+              </Avatar>
+              <div className="flex-1 text-sm">
+                <p className="font-semibold mb-1">FlashZen AI</p>
+                <div className="flex items-center space-x-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>
+                    {isProcessingPdf ? 'Processing PDF...' :
+                      isSearchingWeb ? 'Searching web...' :
+                        isTranscribing ? 'Transcribing audio...' :
+                          isGeneratingContent ? 'Generating content...' : 'Loading...'}
+                  </span>
                 </div>
-             </div>
+              </div>
+            </div>
           )}
         </div>
       </ScrollArea>
@@ -690,8 +862,8 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
             id="num-flashcards"
             type="number"
             value={numFlashcards}
-            onChange={(e) => setNumFlashcards(Math.max(0, parseInt(e.target.value,10) || 0))} // Allow 0 for flashcards too
-            min={0} 
+            onChange={(e) => setNumFlashcards(Math.max(0, parseInt(e.target.value, 10) || 0))} // Allow 0 for flashcards too
+            min={0}
             max={50}
             className="text-sm"
             disabled={anyLoading}
@@ -705,17 +877,17 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
             id="num-quiz-questions"
             type="number"
             value={numQuizQuestions}
-            onChange={(e) => setNumQuizQuestions(Math.max(0, parseInt(e.target.value,10) || 0))}
+            onChange={(e) => setNumQuizQuestions(Math.max(0, parseInt(e.target.value, 10) || 0))}
             min={0}
             max={25}
             className="text-sm"
             disabled={anyLoading}
           />
-           <p className="text-xs text-muted-foreground mt-1">(0 for none)</p>
+          <p className="text-xs text-muted-foreground mt-1">(0 for none)</p>
         </div>
         <div className="flex flex-col justify-center">
           <Label htmlFor="difficulty-select" className="flex items-center gap-2 mb-1 text-sm font-medium">
-             <BarChart3 size={16} /> Difficulty
+            <BarChart3 size={16} /> Difficulty
           </Label>
           <Select value={difficulty} onValueChange={setDifficulty} disabled={anyLoading}>
             <SelectTrigger id="difficulty-select" className="text-sm h-10">
@@ -741,9 +913,41 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
               disabled={anyLoading}
             />
             <span className="text-xs text-muted-foreground">Enable DuckDuckGo</span>
-          </div>
-        </div>
+          </div>        </div>
       </div>
+
+      {/* PDF Viewer */}
+      {showPdfViewer && pdfDataUri && (
+        <div className="mb-4 px-1">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-medium text-muted-foreground">PDF Preview</h3>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowPdfViewer(false)}
+              className="h-7 px-2 text-xs"
+            >
+              Hide Preview
+            </Button>
+          </div>
+          <PDFViewer
+            pdfDataUri={pdfDataUri}
+            className="w-full"
+            maxHeight={300}
+            onLoadSuccess={(info) => {
+              console.log(`PDF loaded successfully: ${info.numPages} pages`);
+            }}
+            onLoadError={(error) => {
+              console.error('PDF viewer error:', error);
+              toast({
+                title: 'PDF Viewer Error',
+                description: 'Failed to display PDF preview. Text extraction may still work.',
+                variant: 'default'
+              });
+            }}
+          />
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="flex gap-2 border-t pt-4 px-1 items-end">
         <Textarea
@@ -770,18 +974,17 @@ export function GenerateTab({ onFlashcardsAndQuizGenerated }: GenerateTabProps) 
         </Button>
         <Button
           type="submit"
-          disabled={anyLoading || (!prompt.trim() && !(pdfFileSourceOfText && extractedPdfText !== null))} 
+          disabled={anyLoading || (!prompt.trim() && !(pdfFileSourceOfText && extractedPdfText !== null))}
           className="h-auto px-4 md:px-6 shadow-md hover:shadow-lg transition-shadow"
         >
           {isGeneratingContent ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
           <span className="sr-only">Generate</span>
         </Button>
       </form>
-       {hasMicPermission === false && (
+      {hasMicPermission === false && (
         <p className="text-xs text-destructive text-center mt-1">Microphone permission denied. Please enable it in browser settings.</p>
       )}
     </div>
   );
 }
 
-    
